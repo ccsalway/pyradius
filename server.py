@@ -1,7 +1,4 @@
-import os
 import socket
-import threading
-import time
 from collections import OrderedDict
 from hashlib import md5
 from struct import pack, unpack
@@ -10,32 +7,9 @@ import six
 from netaddr import IPAddress, IPNetwork
 
 from config import *
+from models.connections import *
+from models.states import *
 from values import *
-
-
-class connections(object):
-    """Stores active requests to prevent duplicate requests."""
-    pass
-
-
-def status_isprocessing(raddr, ident):
-    logger.debug("Checking if request still running for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), threading.current_thread().name))
-    return getattr(connections, '{}.{}:{}'.format(raddr[0], raddr[1], ident), None)
-
-
-def status_starting(raddr, ident):
-    logger.debug("Starting processing request for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), threading.current_thread().name))
-    setattr(connections, '{}.{}:{}'.format(raddr[0], raddr[1], ident), 1)
-
-
-def status_finished(raddr, ident):
-    logger.debug("Finished processing request for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), threading.current_thread().name))
-    delattr(connections, '{}.{}:{}'.format(raddr[0], raddr[1], ident))
-
-
-class sessions(object):
-    """Stores State between challenges."""
-    pass
 
 
 class Error(Exception):
@@ -258,10 +232,6 @@ class AuthRequest(object):
 
     def process_access_response(self, code):
         attrs = OrderedDict({})
-        # [RFC 2865] If Proxy-State attributes were present in the Access-Request, they MUST be copied
-        # unmodified and in order into the response packet for both an Access-Response and Access-Reject.
-        if 'Proxy-State' in attrs:
-            attrs['Proxy-State'] = attrs['Proxy-State']
         # response
         if code == ACCESS_ACCEPT:
             self.response_accept(attrs)
@@ -286,8 +256,8 @@ class AuthRequest(object):
 
     def response_challenge(self, attrs):
         logger.info("ACCESS_CHALLENGE for '{0}' from {2}.{3}:{1}".format(self.username, self.req_ident, *self.raddr))
-        attrs['State'] = 'session-id'
-        attrs['Reply-Message'] = 'Challenge: enter your response at the prompt'
+        attrs['State'] = '{2}.{3}.{1}'.format(self.req_ident, *self.raddr)
+        attrs['Reply-Message'] = 'Challenge to your auth request.'
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_CHALLENGE, attrs)
         data = [self.pack_header(ACCESS_CHALLENGE, len(attrs), resp_auth), attrs]
