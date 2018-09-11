@@ -9,7 +9,7 @@ from netaddr import IPAddress, IPNetwork
 from config import *
 from models.connections import *
 from models.states import *
-from values import *
+from attributes import *
 
 attributes = Attributes()
 
