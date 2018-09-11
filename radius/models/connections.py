@@ -1,10 +1,11 @@
-import os
+import logging
 import time
-from threading import Event, Thread, current_thread
+from threading import Event, Thread
 
-from ..config import logger, connection_stale
+logger = logging.getLogger(__name__)
 
-connectionsFlag = Event()
+connection_timer = 30  # the delay in seconds to check for stale connections
+connection_stale = 310  # the delay in seconds to assume a connection is stale. (>= session_timeout)
 
 
 class Connections(Thread):
@@ -12,36 +13,45 @@ class Connections(Thread):
 
     def __init__(self, event):
         Thread.__init__(self)
-        self.stopped = event
+        self.event = event
 
     def run(self):
         """Remove stale connections."""
-        while not self.stopped.wait(30):
-            logger.debug("Checking for stale connections")
+        logger.debug("0.0.0.0.0 Started checking for stale connections every {} seconds".format(connection_timer))
+        while not self.event.wait(connection_timer):
+            logger.debug("0.0.0.0.0 Checking for stale connections")
             for k, v in self.__dict__.copy().items():
                 if not k.startswith('conn.'): continue
                 if time.time() - v[0] > connection_stale:
-                    logger.debug("Removing stale connection {}".format(k))
+                    logger.debug("0.0.0.0.0 Removing stale connection {}".format(k))
                     self.__delattr__(k)
 
     def cancel(self):
-        connectionsFlag.set()
+        self.event.set()
 
 
-connections = Connections(connectionsFlag)
-connections.start()
+connections = Connections(Event())
+
+
+def set_connection_timeout(timeout):
+    global connection_stale
+    connection_stale = timeout
+
+
+def _get_connection_id(raddr, ident):
+    return 'conn.{}.{}.{}'.format(raddr[0], raddr[1], ident)
 
 
 def status_isprocessing(raddr, ident):
-    logger.debug("Checking if request still running for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), current_thread().name))
-    return getattr(connections, 'conn.{}.{}.{}'.format(raddr[0], raddr[1], ident), None)
+    logger.debug("{0}.{1} Checking for running processing request.".format(*raddr))
+    return getattr(connections, _get_connection_id(raddr, ident), None)
 
 
 def status_starting(raddr, ident):
-    logger.debug("Starting processing request for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), current_thread().name))
-    setattr(connections, 'conn.{}.{}.{}'.format(raddr[0], raddr[1], ident), (time.time(), 1))
+    logger.debug("{0}.{1} Starting processing request.".format(*raddr))
+    setattr(connections, _get_connection_id(raddr, ident), (time.time(), 1))
 
 
 def status_finished(raddr, ident):
-    logger.debug("Finished processing request for {}.{}:{} [{}:{}]".format(raddr[0], raddr[1], ident, os.getpid(), current_thread().name))
-    delattr(connections, 'conn.{}.{}.{}'.format(raddr[0], raddr[1], ident))
+    logger.debug("{0}.{1} Finished processing request.".format(*raddr))
+    delattr(connections, _get_connection_id(raddr, ident))

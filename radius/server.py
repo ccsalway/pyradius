@@ -1,17 +1,23 @@
+import logging
 import socket
 from collections import OrderedDict
 from hashlib import md5
 from struct import pack, unpack
+from threading import Thread
 
 import six
 from netaddr import IPAddress, IPNetwork
 
-from config import *
-from models.connections import *
-from models.sessions import *
 from attributes import *
+from models.connections import connections, set_connection_timeout, status_isprocessing, status_starting, status_finished
+from models.sessions import sessions, set_session_timeout, session_timeout, create_session
+
+logging.basicConfig(level="INFO", format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 attributes = Attributes()
+
+radius_clients = {}
 
 
 class Error(Exception):
@@ -21,10 +27,10 @@ class Error(Exception):
 
 class AuthRequest(object):
     sock = None
-    laddr = None
     raddr = None
     data = None
     length = 0
+
     secret = None
 
     req_code = None
@@ -41,22 +47,21 @@ class AuthRequest(object):
     eap_data = None
     eap_identity = None
 
-    def __init__(self, sock, local_addr, remote_addr, data):
+    def __init__(self, sock, remote_addr, data):
         self.sock = sock
-        self.laddr = local_addr
         self.raddr = remote_addr
         self.data = data
         self.length = len(data)
 
     def lookup_host(self):
         ip_addr = IPAddress(self.raddr[0])
-        for cidr, secret in CLIENTS.items():
+        for cidr, secret in radius_clients.items():
             if ip_addr in IPNetwork(cidr):
-                if len(self.secret) == 0:
-                    raise Error("Discarding request from {0}.{1}. Secret is empty (length 0).".format(*self.raddr))
+                if len(secret) == 0:
+                    raise Error("{0}.{1} Discarding request. Secret is empty (length 0).".format(*self.raddr))
                 self.secret = secret
-                return secret
-        raise Error("Discarding request from {0}.{1}. Unknown Host.".format(*self.raddr))
+                return
+        raise Error("{0}.{1} Discarding request. Unknown Host.".format(*self.raddr))
 
     def decode_attribute(self, code, value):
         typ = attributes.get_type(code)
@@ -99,12 +104,12 @@ class AuthRequest(object):
             return IPAddress(value).packed
         elif typ == "enum":
             return pack('!I', attributes.get_enum_code(code, value))
-        raise Error("Discarding request from {2}.{3}. Unhandled attribute '{0} {1}'.".format(code, typ, *self.raddr))
+        raise Error("{2}.{3} Discarding request. Unhandled attribute '{0} {1}'.".format(code, typ, *self.raddr))
 
     def unpack_request(self):
         self.req_code, self.req_ident, self.req_length = unpack('!BBH', self.data[:4])
         if self.length < self.req_length:
-            raise Error("Discarding request from {0}.{1}. Actual length of data is less than specified.".format(*self.raddr))
+            raise Error("{0}.{1} Discarding request. Actual length of data is less than specified.".format(*self.raddr))
         self.req_authenticator = unpack('!16s', self.data[4:20])[0]
         self.unpack_attributes()
 
@@ -117,7 +122,7 @@ class AuthRequest(object):
             name = attributes.get_name(code)
             attrs.setdefault(name, []).append(value)
             pos += length
-        logger.debug(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]))
+        logger.debug("{1}.{2} {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *self.raddr))
         self.req_attrs = attrs
 
     def unpack_eap_message(self):
@@ -127,7 +132,7 @@ class AuthRequest(object):
 
     def get_user_password(self):
         # Default password. Override in production.
-        return u'Pa$$word123'.decode('utf-8')
+        return 'fakepassword'
 
     def verify_pap_password(self):
         plain_pswd = self.get_user_password()
@@ -135,9 +140,9 @@ class AuthRequest(object):
         pw = six.b('')
         last = self.req_authenticator
         while buf:
-            hash = md5(self.secret + last).digest()
+            _hash = md5(self.secret + last).digest()
             for i in range(16):
-                pw += chr(ord(hash[i]) ^ ord(buf[i]))
+                pw += chr(ord(_hash[i]) ^ ord(buf[i]))
             (last, buf) = (buf[:16], buf[16:])
         while pw.endswith(six.b('\x00')):
             pw = pw[:-1]
@@ -171,7 +176,8 @@ class AuthRequest(object):
         return pack('!BBH16s', code, self.req_ident, 20 + length_attrs, resp_authenticator)
 
     def pack_attributes(self, attrs):
-        if not attrs: return b''
+        if not attrs:
+            return b''
         data = []
         for name, values in attrs.items():
             for value in values:
@@ -186,16 +192,16 @@ class AuthRequest(object):
     #
 
     def __call__(self, *args, **kwargs):
-        logger.info("Received {0} bytes from {1}.{2}".format(len(data), *self.raddr))
+        logger.debug("{1}.{2} Received {0} bytes".format(len(self.data), *self.raddr))
         try:
             if self.length < 20:
-                raise Error("Discarding request from {0}.{1}. Data length less than minimum length of 20.".format(*self.raddr))
+                raise Error("{0}.{1} Discarding request. Data length less than minimum length of 20.".format(*self.raddr))
             # if len(data) > 4096:  # as per RFC but restricts the size of secrets
             #     raise Error("Discarding request from {0}.{1}. Data length more than maximum length of 4096.".format(*self.raddr))
             self.lookup_host()
             self.unpack_request()
             if status_isprocessing(self.raddr, self.req_ident):
-                logger.info("Discarding request from {0}.{1}. Duplicate request.".format(*self.raddr))
+                logger.info("{0}.{1} Discarding request. Duplicate request.".format(*self.raddr))
             else:
                 status_starting(self.raddr, self.req_ident)
                 try:
@@ -204,7 +210,7 @@ class AuthRequest(object):
                 finally:
                     status_finished(self.raddr, self.req_ident)
         except Error as e:
-            logger.warning(e.message)
+            logger.error(e.message)
         except Exception as e:
             logger.exception(e)
 
@@ -218,15 +224,15 @@ class AuthRequest(object):
         # EAP
         if 'EAP-Message' in self.req_attrs:
             if 'Message-Authenticator' not in self.req_attrs:
-                raise Error("Discarding request from {0}.{1}. EAP-Message received without Message-Authenticator".format(*self.raddr))
+                raise Error("{0}.{1} Discarding request. EAP-Message received without Message-Authenticator".format(*self.raddr))
             self.unpack_eap_message()
             if not 1 <= self.eap_code <= 4:
-                raise Error("Discarding request from {1}.{2}. Unknown EAP-Message code '{0}'".format(self.eap_code, *self.raddr))
+                raise Error("{0}.{1} Discarding request. Unknown EAP-Message code '{0}'".format(self.eap_code, *self.raddr))
             if not (1 <= self.eap_type <= 6 or self.eap_type == 254 or self.eap_type == 255):
-                raise Error("Discarding request from {1}.{2}. Unknown EAP-Message type '{0}'".format(self.eap_type, *self.raddr))
+                raise Error("{0}.{1} Discarding request. Unknown EAP-Message type '{0}'".format(self.eap_type, *self.raddr))
             if self.eap_type == 1:  # Identity
                 self.eap_identity = self.eap_data
-                logger.debug("EAP-Identity: {0} from {1}.{2}".format(repr(self.eap_identity), *self.raddr))
+                logger.debug("{1}.{2} EAP-Identity: {0}".format(repr(self.eap_identity), *self.raddr))
         # CHAP
         elif 'CHAP-Password' in self.req_attrs:
             if self.verify_chap_password():
@@ -253,49 +259,69 @@ class AuthRequest(object):
             self.response_reject(attrs)
 
     def response_accept(self, attrs):
-        logger.info("ACCESS_ACCEPT for '{0}' from {2}.{3}:{1}".format(self.username, self.req_ident, *self.raddr))
+        logger.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
+        attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
         data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]
-        sock.sendto(b''.join(data), self.raddr)
+        self.sock.sendto(b''.join(data), self.raddr)
 
     def response_reject(self, attrs):
-        logger.info("ACCESS_REJECT for '{0}' from {2}.{3}:{1}".format(self.username, self.req_ident, *self.raddr))
+        logger.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_REJECT, attrs)
         data = [self.pack_header(ACCESS_REJECT, len(attrs), resp_auth), attrs]
-        sock.sendto(b''.join(data), self.raddr)
+        self.sock.sendto(b''.join(data), self.raddr)
 
     def response_challenge(self, attrs):
         """
         :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State' are allowed.
         """
-        logger.info("ACCESS_CHALLENGE for '{0}' from {2}.{3}:{1}".format(self.username, self.req_ident, *self.raddr))
-        attrs['State'] = '{2}.{3}.{1}'.format(self.req_ident, *self.raddr)
+        logger.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
+        session_id = create_session(self.raddr, self.req_ident, self.req_attrs)
+        attrs['State'] = session_id
         attrs['Session-Timeout'] = session_timeout
         attrs['Reply-Message'] = 'Challenge to your auth request.'
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_CHALLENGE, attrs)
         data = [self.pack_header(ACCESS_CHALLENGE, len(attrs), resp_auth), attrs]
-        sock.sendto(b''.join(data), self.raddr)
+        self.sock.sendto(b''.join(data), self.raddr)
 
 
-if __name__ == "__main__":
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        logger.info("Starting Radius Server on {}:{}".format(BIND_ADDR, AUTH_PORT))
-        sock.bind((BIND_ADDR, AUTH_PORT))
-        local_addr = sock.getsockname()
-        logger.info("Started Radius Server on {}:{}".format(*local_addr))
-        while True:
-            data, remote_addr = sock.recvfrom(BUFF_SIZE)
-            Thread(target=AuthRequest(sock, local_addr, remote_addr, data)).start()
-    except socket.error as e:
-        exit(e)
-    except KeyboardInterrupt:
-        logger.info("Received KeyboardInterrupt. Shutting down.")
-    finally:
-        sock.close()
-        connections.cancel()
-        sessions.cancel()
+class Server(object):
+    def __init__(self, clients, bind_addr='', auth_port=1812, buff_size=8192):
+        self.bind_addr = bind_addr
+        self.auth_port = auth_port
+        self.buff_size = buff_size
+        global radius_clients
+        radius_clients = clients
+
+    def set_session_timeout(self, timeout):
+        set_session_timeout(timeout)
+
+    def set_connection_timeout(self, timeout):
+        set_connection_timeout(timeout)
+
+    def start(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            logger.info("0.0.0.0.0 Starting Radius Server on {}:{}".format(self.bind_addr, self.auth_port))
+            sock.bind((self.bind_addr, self.auth_port))
+            local_addr = sock.getsockname()
+            logger.info("{0}.{1} Started Radius Server.".format(*local_addr))
+            sessions.start()
+            connections.start()
+            try:
+                while True:
+                    data, remote_addr = sock.recvfrom(self.buff_size)
+                    Thread(target=AuthRequest(sock, remote_addr, data)).start()
+            finally:
+                sessions.cancel()
+                connections.cancel()
+        except socket.error as e:
+            exit(e)
+        except KeyboardInterrupt:
+            logger.info("Received Keyboard Interrupt. Shutting down.")
+        finally:
+            sock.close()
