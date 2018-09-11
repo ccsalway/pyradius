@@ -11,6 +11,8 @@ from models.connections import *
 from models.states import *
 from values import *
 
+attributes = Attributes()
+
 
 class Error(Exception):
     """Custom Exception class."""
@@ -23,8 +25,6 @@ class AuthRequest(object):
     raddr = None
     data = None
     secret = None
-
-    attributes = Attributes()
 
     req_code = None
     req_ident = None
@@ -55,7 +55,7 @@ class AuthRequest(object):
         raise Error("Dropping packet from unknown host {}".format(self.raddr[0]))
 
     def decode_attribute(self, code, value):
-        typ = self.attributes.get_type(code)
+        typ = attributes.get_type(code)
         if typ in ('text', 'string'):
             try:
                 value = value.decode('utf-8')
@@ -77,11 +77,11 @@ class AuthRequest(object):
             pass  # ??
         elif typ == 'enum':
             key = unpack('!I', value)[0]
-            value = self.attributes.get_enum_text(code, key)
+            value = attributes.get_enum_text(code, key)
         return value
 
     def encode_attribute(self, code, value):
-        typ = self.attributes.get_type(code)
+        typ = attributes.get_type(code)
         if typ in ('text', 'string', 'concat'):
             if typ == 'concat':
                 value = b''.join(value)
@@ -94,7 +94,7 @@ class AuthRequest(object):
         elif typ == "ipv4addr":
             return IPAddress(value).packed
         elif typ == "enum":
-            return pack('!I', self.attributes.get_enum_code(code, value))
+            return pack('!I', attributes.get_enum_code(code, value))
         raise Error("Unhandled attribute '{0} {1}' from {3}.{4}:{2}".format(code, typ, self.req_ident, *self.raddr))
 
     def unpack_request(self):
@@ -108,7 +108,7 @@ class AuthRequest(object):
         while pos < len(self.data):
             code, length = unpack('!BB', self.data[pos:pos + 2])
             value = self.decode_attribute(code, self.data[pos + 2:pos + length])
-            name = self.attributes.get_name(code)
+            name = attributes.get_name(code)
             attrs.setdefault(name, []).append(value)
             pos += length
         logger.debug(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]))
@@ -169,7 +169,7 @@ class AuthRequest(object):
         data = []
         for name, values in attrs.items():
             for value in values:
-                code = self.attributes.get_code(name)
+                code = attributes.get_code(name)
                 val = self.encode_attribute(code, value)
                 length = len(val)
                 data.append(pack('!BB{}s'.format(length), code, length + 2, val))
