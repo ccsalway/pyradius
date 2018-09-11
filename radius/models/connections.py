@@ -2,27 +2,25 @@ import os
 import time
 from threading import Event, Thread, current_thread
 
-from config import logger, connections_ttl
+from ..config import logger, connection_stale
 
 connectionsFlag = Event()
 
 
 class Connections(Thread):
-    """
-    Stores active requests to prevent duplicate requests.
-    Removes stale connections after connections_ttl seconds
-    """
+    """Stores active requests to prevent duplicate requests."""
 
     def __init__(self, event):
         Thread.__init__(self)
         self.stopped = event
 
     def run(self):
+        """Remove stale connections."""
         while not self.stopped.wait(30):
             logger.debug("Checking for stale connections")
             for k, v in self.__dict__.copy().items():
                 if not k.startswith('conn.'): continue
-                if time.time() - v[0] > connections_ttl:
+                if time.time() - v[0] > connection_stale:
                     logger.debug("Removing stale connection {}".format(k))
                     self.__delattr__(k)
 

@@ -7,8 +7,8 @@ BUFF_SIZE = 8192
 logging.basicConfig(level="DEBUG", format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-connections_ttl = 30
-states_ttl = 600
+session_timeout = 300  # the amount of time a client has to respond to a challenge
+connection_stale = 300  # should be >= session_timeout
 
 CLIENTS = {
     # Can be a single IP or CIDR

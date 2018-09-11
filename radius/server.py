@@ -8,7 +8,7 @@ from netaddr import IPAddress, IPNetwork
 
 from config import *
 from models.connections import *
-from models.states import *
+from models.sessions import *
 from attributes import *
 
 attributes = Attributes()
@@ -24,6 +24,7 @@ class AuthRequest(object):
     laddr = None
     raddr = None
     data = None
+    length = 0
     secret = None
 
     req_code = None
@@ -45,14 +46,17 @@ class AuthRequest(object):
         self.laddr = local_addr
         self.raddr = remote_addr
         self.data = data
+        self.length = len(data)
 
     def lookup_host(self):
         ip_addr = IPAddress(self.raddr[0])
         for cidr, secret in CLIENTS.items():
             if ip_addr in IPNetwork(cidr):
+                if len(self.secret) == 0:
+                    raise Error("Discarding request from {0}.{1}. Secret is empty (length 0).".format(*self.raddr))
                 self.secret = secret
                 return secret
-        raise Error("Dropping packet from unknown host {}".format(self.raddr[0]))
+        raise Error("Discarding request from {0}.{1}. Unknown Host.".format(*self.raddr))
 
     def decode_attribute(self, code, value):
         typ = attributes.get_type(code)
@@ -95,17 +99,19 @@ class AuthRequest(object):
             return IPAddress(value).packed
         elif typ == "enum":
             return pack('!I', attributes.get_enum_code(code, value))
-        raise Error("Unhandled attribute '{0} {1}' from {3}.{4}:{2}".format(code, typ, self.req_ident, *self.raddr))
+        raise Error("Discarding request from {2}.{3}. Unhandled attribute '{0} {1}'.".format(code, typ, *self.raddr))
 
     def unpack_request(self):
         self.req_code, self.req_ident, self.req_length = unpack('!BBH', self.data[:4])
+        if self.length < self.req_length:
+            raise Error("Discarding request from {0}.{1}. Actual length of data is less than specified.".format(*self.raddr))
         self.req_authenticator = unpack('!16s', self.data[4:20])[0]
         self.unpack_attributes()
 
     def unpack_attributes(self):
         # code(1), length(2), value(length-3)
         pos, attrs = 20, OrderedDict({})
-        while pos < len(self.data):
+        while pos < self.req_length:  # ignore out-of-bounds data which could be padding
             code, length = unpack('!BB', self.data[pos:pos + 2])
             value = self.decode_attribute(code, self.data[pos + 2:pos + length])
             name = attributes.get_name(code)
@@ -180,12 +186,16 @@ class AuthRequest(object):
     #
 
     def __call__(self, *args, **kwargs):
-        logger.info("Received request from {0}.{1}".format(*self.raddr))
+        logger.info("Received {0} bytes from {1}.{2}".format(len(data), *self.raddr))
         try:
+            if self.length < 20:
+                raise Error("Discarding request from {0}.{1}. Data length less than minimum length of 20.".format(*self.raddr))
+            # if len(data) > 4096:  # as per RFC but restricts the size of secrets
+            #     raise Error("Discarding request from {0}.{1}. Data length more than maximum length of 4096.".format(*self.raddr))
             self.lookup_host()
             self.unpack_request()
             if status_isprocessing(self.raddr, self.req_ident):
-                logger.info("Ignoring repeat request from {1}.{2}:{0}".format(self.req_ident, *self.raddr))
+                logger.info("Discarding request from {0}.{1}. Duplicate request.".format(*self.raddr))
             else:
                 status_starting(self.raddr, self.req_ident)
                 try:
@@ -199,37 +209,40 @@ class AuthRequest(object):
             logger.exception(e)
 
     def process_access_request(self):
+        # Message Authenticator
+        if 'Message-Authenticator' in self.req_attrs:
+            pass
         # Username
         if 'User-Name' in self.req_attrs:
             self.username = self.req_attrs['User-Name'][0]
         # EAP
         if 'EAP-Message' in self.req_attrs:
             if 'Message-Authenticator' not in self.req_attrs:
-                raise Error("EAP-Message received without Message-Authenticator from {1}.{2}:{0}".format(self.req_ident, *self.raddr))
+                raise Error("Discarding request from {0}.{1}. EAP-Message received without Message-Authenticator".format(*self.raddr))
             self.unpack_eap_message()
             if not 1 <= self.eap_code <= 4:
-                raise Error("Invalid EAP-Message code '{0}' from {2}.{3}:{1}".format(self.eap_code, self.req_ident, *self.raddr))
+                raise Error("Discarding request from {1}.{2}. Unknown EAP-Message code '{0}'".format(self.eap_code, *self.raddr))
             if not (1 <= self.eap_type <= 6 or self.eap_type == 254 or self.eap_type == 255):
-                raise Error("Invalid EAP-Message type '{0}' from {2}.{3}:{1}".format(self.eap_type, self.req_ident, *self.raddr))
+                raise Error("Discarding request from {1}.{2}. Unknown EAP-Message type '{0}'".format(self.eap_type, *self.raddr))
             if self.eap_type == 1:  # Identity
                 self.eap_identity = self.eap_data
-                logger.debug("EAP-Identity: {0} from {2}.{3}:{1}".format(repr(self.eap_identity), self.req_ident, *self.raddr))
+                logger.debug("EAP-Identity: {0} from {1}.{2}".format(repr(self.eap_identity), *self.raddr))
         # CHAP
         elif 'CHAP-Password' in self.req_attrs:
             if self.verify_chap_password():
-                return self.process_access_response(ACCESS_ACCEPT)
+                return self.process_response(ACCESS_ACCEPT)
         # PAP
         elif 'User-Password' in self.req_attrs:
             if self.verify_pap_password():
-                return self.process_access_response(ACCESS_ACCEPT)
+                return self.process_response(ACCESS_ACCEPT)
         # default reject
-        return self.process_access_response(ACCESS_REJECT)
+        return self.process_response(ACCESS_REJECT)
 
     #
     # RESPONSE
     #
 
-    def process_access_response(self, code):
+    def process_response(self, code):
         attrs = OrderedDict({})
         # response
         if code == ACCESS_ACCEPT:
@@ -254,8 +267,12 @@ class AuthRequest(object):
         sock.sendto(b''.join(data), self.raddr)
 
     def response_challenge(self, attrs):
+        """
+        :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State' are allowed.
+        """
         logger.info("ACCESS_CHALLENGE for '{0}' from {2}.{3}:{1}".format(self.username, self.req_ident, *self.raddr))
         attrs['State'] = '{2}.{3}.{1}'.format(self.req_ident, *self.raddr)
+        attrs['Session-Timeout'] = session_timeout
         attrs['Reply-Message'] = 'Challenge to your auth request.'
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_CHALLENGE, attrs)
@@ -281,4 +298,4 @@ if __name__ == "__main__":
     finally:
         sock.close()
         connections.cancel()
-        states.cancel()
+        sessions.cancel()
