@@ -189,7 +189,6 @@ class AuthRequest(object):
             else:
                 status_starting(self.raddr, self.req_ident)
                 try:
-                    time.sleep(9)
                     if self.req_code == ACCESS_REQUEST:
                         self.process_access_request()
                 finally:
@@ -274,10 +273,12 @@ if __name__ == "__main__":
         logger.info("Started Radius Server on {}:{}".format(*local_addr))
         while True:
             data, remote_addr = sock.recvfrom(BUFF_SIZE)
-            threading.Thread(target=AuthRequest(sock, local_addr, remote_addr, data)).start()
+            Thread(target=AuthRequest(sock, local_addr, remote_addr, data)).start()
     except socket.error as e:
         exit(e)
     except KeyboardInterrupt:
         logger.info("Received KeyboardInterrupt. Shutting down.")
     finally:
         sock.close()
+        connections.cancel()
+        states.cancel()

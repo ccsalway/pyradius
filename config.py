@@ -7,7 +7,8 @@ BUFF_SIZE = 8192
 logging.basicConfig(level="DEBUG", format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-conn_file = 'connections'
+connections_ttl = 30
+states_ttl = 600
 
 CLIENTS = {
     # Can be a single IP or CIDR
