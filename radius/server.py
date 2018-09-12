@@ -141,20 +141,20 @@ class Server(object):
             data_length = len(data)
             auditlog.debug("{1}.{2} Received {0} bytes".format(data_length, *raddr))
             if data_length < 20:
-                raise Error("{0}.{1} Discarding request. Data length less than minimum length of 20.".format(*raddr))
+                raise Error("Discarding request. Data length less than minimum length of 20.")
             # check host known
             secret = self.lookup_host(raddr)
             if not secret:
-                raise Error("{0}.{1} Discarding request. Unknown Host.".format(*raddr))
+                raise Error("Discarding request. Unknown Host.")
             # unpack request
             code, ident, length = unpack('!BBH', data[:4])  # header
             if code not in (1, 2, 3, 4, 5, 11, 12, 13, 255):
-                raise Error("{1}.{2} Discarding request. Unknown RADIUS code {0}.".format(code, *raddr))
+                raise Error("Discarding request. Unknown RADIUS code {0}.".format(code))
             if data_length < length:
-                raise Error("{0}.{1} Discarding request. Actual length of data is less than specified.".format(*raddr))
+                raise Error("Discarding request. Actual length of data is less than specified.")
             # duplicate test
             if self.status_isprocessing(raddr, ident):
-                raise Info("{0}.{1} Discarding request. Duplicate request.".format(*raddr))
+                raise Info("Discarding request. Duplicate request.")
             # request authenticator
             authenticator = unpack('!16s', data[4:20])[0]  # random 16 numbers 0..255
             # attributes
@@ -182,8 +182,10 @@ class Server(object):
                     serverlog.error("Unhandled RADIUS code received {} from {}.{}".format(code, *raddr))
             finally:
                 self.status_finished(raddr, ident)
+        except Info as e:
+            auditlog.info("{1}.{2} {0}".format(e, *raddr))
         except Error as e:
-            auditlog.error(e)
+            auditlog.error("{1}.{2} {0}".format(e, *raddr))
         except Exception as e:
             serverlog.exception(e)
 
@@ -192,7 +194,7 @@ class Server(object):
         for cidr, secret in self.clients.items():
             if ip_addr in IPNetwork(cidr):
                 if len(secret) == 0:
-                    raise Error("{0}.{1} Discarding request. Secret is empty (length 0).".format(*raddr))
+                    raise Error("Discarding request. Secret is empty (length 0).")
                 return secret
 
     #
