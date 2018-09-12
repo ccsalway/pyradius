@@ -1,327 +1,131 @@
 import logging
 import socket
-from collections import OrderedDict
-from hashlib import md5
-from struct import pack, unpack
-from threading import Thread
+import threading
+import time
 
-import six
-from netaddr import IPAddress, IPNetwork
+from auth import AuthRequest
 
-from attributes import *
-from models.connections import connections, set_connection_timeout, status_isprocessing, status_starting, status_finished
-from models.sessions import sessions, set_session_timeout, session_timeout, create_session
+logging.basicConfig(level="DEBUG", format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-logging.basicConfig(level="INFO", format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+serverlog = logging.getLogger('server')
+auditlog = logging.getLogger('audit')
 
-attributes = Attributes()
-
-radius_clients = {}
-
-
-class Error(Exception):
-    """Custom Exception class."""
-    pass
-
-
-class AuthRequest(object):
-    sock = None
-    raddr = None
-    data = None
-    length = 0
-
-    secret = None
-
-    req_code = None
-    req_ident = None
-    req_length = 0
-    req_authenticator = None
-    req_attrs = OrderedDict({})
-
-    username = None
-
-    eap_code = None
-    eap_reqid = None
-    eap_type = None
-    eap_data = None
-    eap_identity = None
-
-    def __init__(self, sock, remote_addr, data):
-        self.sock = sock
-        self.raddr = remote_addr
-        self.data = data
-        self.length = len(data)
-
-    def lookup_host(self):
-        ip_addr = IPAddress(self.raddr[0])
-        for cidr, secret in radius_clients.items():
-            if ip_addr in IPNetwork(cidr):
-                if len(secret) == 0:
-                    raise Error("{0}.{1} Discarding request. Secret is empty (length 0).".format(*self.raddr))
-                self.secret = secret
-                return
-        raise Error("{0}.{1} Discarding request. Unknown Host.".format(*self.raddr))
-
-    def decode_attribute(self, code, value):
-        typ = attributes.get_type(code)
-        if typ in ('text', 'string'):
-            try:
-                value = value.decode('utf-8')
-            except UnicodeDecodeError:
-                pass
-        elif typ == 'integer':
-            value = unpack('!I', value)[0]
-        elif typ == 'ipv4addr':
-            value = '.'.join(map(str, unpack('!BBBB', value)))
-        elif typ == 'ipv6addr':
-            addr = value + b'\x00' * (16 - len(value))
-            prefix = ':'.join(map('{0:x}'.format, unpack('!' + 'H' * 8, addr)))
-            value = str(IPAddress(prefix))
-        elif typ == 'ipv6prefix':
-            addr = value + b'\x00' * (18 - len(value))
-            _, length, prefix = ':'.join(map('{0:x}'.format, unpack('!BB' + 'H' * 8, addr))).split(":", 2)
-            value = str(IPNetwork("%s/%s" % (prefix, int(length, 16))))
-        elif typ == 'ifid':
-            pass  # ??
-        elif typ == 'enum':
-            key = unpack('!I', value)[0]
-            value = attributes.get_enum_text(code, key)
-        return value
-
-    def encode_attribute(self, code, value):
-        typ = attributes.get_type(code)
-        if typ in ('text', 'string', 'concat'):
-            if typ == 'concat':
-                value = b''.join(value)
-            try:
-                return value.encode('utf-8')
-            except UnicodeDecodeError:
-                return value
-        elif typ == 'integer':
-            return pack('!I', int(value))
-        elif typ == "ipv4addr":
-            return IPAddress(value).packed
-        elif typ == "enum":
-            return pack('!I', attributes.get_enum_code(code, value))
-        raise Error("{2}.{3} Discarding request. Unhandled attribute '{0} {1}'.".format(code, typ, *self.raddr))
-
-    def unpack_request(self):
-        self.req_code, self.req_ident, self.req_length = unpack('!BBH', self.data[:4])
-        if self.length < self.req_length:
-            raise Error("{0}.{1} Discarding request. Actual length of data is less than specified.".format(*self.raddr))
-        self.req_authenticator = unpack('!16s', self.data[4:20])[0]
-        self.unpack_attributes()
-
-    def unpack_attributes(self):
-        # code(1), length(2), value(length-3)
-        pos, attrs = 20, OrderedDict({})
-        while pos < self.req_length:  # ignore out-of-bounds data which could be padding
-            code, length = unpack('!BB', self.data[pos:pos + 2])
-            value = self.decode_attribute(code, self.data[pos + 2:pos + length])
-            name = attributes.get_name(code)
-            attrs.setdefault(name, []).append(value)
-            pos += length
-        logger.debug("{1}.{2} {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *self.raddr))
-        self.req_attrs = attrs
-
-    def unpack_eap_message(self):
-        eap_msg = ''.join(self.req_attrs['EAP-Message'])  # EAP-Message attribute (concat)
-        self.eap_code, self.eap_reqid, length, self.eap_type = unpack('!BBHB', eap_msg[:5])
-        self.eap_data = unpack('!{}s'.format(length - 5), eap_msg[5:length])[0]
-
-    def get_user_password(self):
-        # Default password. Override in production.
-        return 'fakepassword'
-
-    def verify_pap_password(self):
-        plain_pswd = self.get_user_password()
-        buf = self.req_attrs['User-Password'][0]
-        pw = six.b('')
-        last = self.req_authenticator
-        while buf:
-            _hash = md5(self.secret + last).digest()
-            for i in range(16):
-                pw += chr(ord(_hash[i]) ^ ord(buf[i]))
-            (last, buf) = (buf[:16], buf[16:])
-        while pw.endswith(six.b('\x00')):
-            pw = pw[:-1]
-        return plain_pswd == pw.decode('utf-8')
-
-    def verify_chap_password(self):
-        plain_pswd = self.get_user_password()
-        # id, password
-        chap_password = self.req_attrs['CHAP-Password'][0]
-        chapid, password = chap_password[0], chap_password[1:]
-        # challenge
-        chap_challenge = self.req_authenticator
-        if 'CHAP-Challenge' in self.req_attrs:
-            chap_challenge = self.req_attrs['CHAP-Challenge'][0]
-        # comparison
-        return password == md5("{}{}{}".format(chapid, plain_pswd, chap_challenge)).digest()
-
-    def response_authenticator(self, code, attrs):
-        # ResponseAuth = MD5(Code + ID + Length + RequestAuth + Attributes + Secret) [RFC2865]
-        len_attrs, len_secret = len(attrs), len(self.secret)
-        p = pack('!BBH16s{}s{}s'.format(len_attrs, len_secret),
-                 code,
-                 self.req_ident,
-                 20 + len_attrs,
-                 self.req_authenticator,
-                 attrs,
-                 self.secret)
-        return md5(p).digest()
-
-    def pack_header(self, code, length_attrs, resp_authenticator):
-        return pack('!BBH16s', code, self.req_ident, 20 + length_attrs, resp_authenticator)
-
-    def pack_attributes(self, attrs):
-        if not attrs:
-            return b''
-        data = []
-        for name, values in attrs.items():
-            for value in values:
-                code = attributes.get_code(name)
-                val = self.encode_attribute(code, value)
-                length = len(val)
-                data.append(pack('!BB{}s'.format(length), code, length + 2, val))
-        return b''.join(data)
-
-    #
-    # REQUEST
-    #
-
-    def __call__(self, *args, **kwargs):
-        logger.debug("{1}.{2} Received {0} bytes".format(len(self.data), *self.raddr))
-        try:
-            if self.length < 20:
-                raise Error("{0}.{1} Discarding request. Data length less than minimum length of 20.".format(*self.raddr))
-            # if len(data) > 4096:  # as per RFC but restricts the size of secrets
-            #     raise Error("Discarding request from {0}.{1}. Data length more than maximum length of 4096.".format(*self.raddr))
-            self.lookup_host()
-            self.unpack_request()
-            if status_isprocessing(self.raddr, self.req_ident):
-                logger.info("{0}.{1} Discarding request. Duplicate request.".format(*self.raddr))
-            else:
-                status_starting(self.raddr, self.req_ident)
-                try:
-                    if self.req_code == ACCESS_REQUEST:
-                        self.process_access_request()
-                finally:
-                    status_finished(self.raddr, self.req_ident)
-        except Error as e:
-            logger.error(e.message)
-        except Exception as e:
-            logger.exception(e)
-
-    def process_access_request(self):
-        # Message Authenticator
-        if 'Message-Authenticator' in self.req_attrs:
-            pass
-        # Username
-        if 'User-Name' in self.req_attrs:
-            self.username = self.req_attrs['User-Name'][0]
-        # EAP
-        if 'EAP-Message' in self.req_attrs:
-            if 'Message-Authenticator' not in self.req_attrs:
-                raise Error("{0}.{1} Discarding request. EAP-Message received without Message-Authenticator".format(*self.raddr))
-            self.unpack_eap_message()
-            if not 1 <= self.eap_code <= 4:
-                raise Error("{0}.{1} Discarding request. Unknown EAP-Message code '{0}'".format(self.eap_code, *self.raddr))
-            if not (1 <= self.eap_type <= 6 or self.eap_type == 254 or self.eap_type == 255):
-                raise Error("{0}.{1} Discarding request. Unknown EAP-Message type '{0}'".format(self.eap_type, *self.raddr))
-            if self.eap_type == 1:  # Identity
-                self.eap_identity = self.eap_data
-                logger.debug("{1}.{2} EAP-Identity: {0}".format(repr(self.eap_identity), *self.raddr))
-        # CHAP
-        elif 'CHAP-Password' in self.req_attrs:
-            if self.verify_chap_password():
-                return self.process_response(ACCESS_ACCEPT)
-        # PAP
-        elif 'User-Password' in self.req_attrs:
-            if self.verify_pap_password():
-                return self.process_response(ACCESS_ACCEPT)
-        # default reject
-        return self.process_response(ACCESS_REJECT)
-
-    #
-    # RESPONSE
-    #
-
-    def process_response(self, code):
-        attrs = OrderedDict({})
-        # response
-        if code == ACCESS_ACCEPT:
-            self.response_accept(attrs)
-        elif code == ACCESS_REJECT:
-            self.response_reject(attrs)
-        elif code == ACCESS_CHALLENGE:
-            self.response_reject(attrs)
-
-    def response_accept(self, attrs):
-        logger.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
-        attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
-        data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
-
-    def response_reject(self, attrs):
-        logger.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_REJECT, attrs)
-        data = [self.pack_header(ACCESS_REJECT, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
-
-    def response_challenge(self, attrs):
-        """
-        :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State' are allowed.
-        """
-        logger.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
-        session_id = create_session(self.raddr, self.req_ident, self.req_attrs)
-        attrs['State'] = session_id
-        attrs['Session-Timeout'] = session_timeout
-        attrs['Reply-Message'] = 'Challenge to your auth request.'
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_CHALLENGE, attrs)
-        data = [self.pack_header(ACCESS_CHALLENGE, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
+lock = threading.Lock()
 
 
 class Server(object):
-    def __init__(self, clients, bind_addr='', auth_port=1812, buff_size=8192):
+    clients = {}
+    connections = {}
+    sessions = {}
+
+    connections_interval = 5
+    connection_timeout = 10
+    sessions_interval = 5
+    session_timeout = 600
+
+    def __init__(self, clients, bind_addr='', auth_port=1812, buff_size=4096):
+        self.clients = clients
         self.bind_addr = bind_addr
         self.auth_port = auth_port
         self.buff_size = buff_size
-        global radius_clients
-        radius_clients = clients
 
-    def set_session_timeout(self, timeout):
-        set_session_timeout(timeout)
+    def cleanup_connections(self):
+        """Prevents duplicate requests in a short time frame."""
+        stopped = threading.Event()
 
-    def set_connection_timeout(self, timeout):
-        set_connection_timeout(timeout)
+        def loop():
+            serverlog.debug("Checking for stale connections every {} seconds".format(self.connections_interval))
+            while not stopped.wait(self.connections_interval):
+                for k, v in self.connections.copy().items():
+                    if not k.startswith('conn.'): continue
+                    if time.time() - v[0] > self.connection_timeout:
+                        serverlog.debug("Removing stale connection {}".format(k))
+                        self.connections.pop(k, None)
+
+        threading.Thread(target=loop).start()
+        return stopped.set
+
+    def _get_connection_id(self, raddr, ident):
+        return 'conn.{}.{}.{}'.format(raddr[0], raddr[1], ident)
+
+    def status_isprocessing(self, raddr, ident):
+        auditlog.debug("{0}.{1} Checking for running processing request.".format(*raddr))
+        return self._get_connection_id(raddr, ident) in self.connections
+
+    def status_starting(self, raddr, ident):
+        auditlog.debug("{0}.{1} Starting processing request.".format(*raddr))
+        self.connections[self._get_connection_id(raddr, ident)] = (time.time(), 1)
+
+    def status_finished(self, raddr, ident):
+        auditlog.debug("{0}.{1} Finished processing request.".format(*raddr))
+        self.connections.pop(self._get_connection_id(raddr, ident))
+
+    def cleanup_sessions(self):
+        """The amount of time allowed to respond to a challenge."""
+        stopped = threading.Event()
+
+        def loop():
+            serverlog.debug("Checking for aged sessions every {} seconds".format(self.sessions_interval))
+            while not stopped.wait(self.sessions_interval):
+                for k, v in self.sessions.copy().items():
+                    if not k.startswith('sess.'): continue
+                    if time.time() - v[0] > self.session_timeout:
+                        serverlog.debug("Removing aged session {}".format(k))
+                        self.sessions.pop(k, None)
+
+        threading.Thread(target=loop).start()
+        return stopped.set
+
+    def _get_session_id(self, raddr, ident):
+        return 'sess.{}.{}.{}'.format(raddr[0], raddr[1], ident)
+
+    def get_session(self, raddr, ident):
+        session_id = self._get_session_id(raddr, ident)
+        auditlog.debug("{1}.{2} Getting session '{0}'.".format(session_id, *raddr))
+        return self.sessions.get(session_id, None)
+
+    def create_session(self, raddr, ident, attr):
+        session_id = self._get_session_id(raddr, ident)
+        auditlog.debug("{1}.{2} Saving session '{0}'.".format(session_id, *raddr))
+        self.sessions[session_id] = (time.time(), attr)
+        return session_id
+
+    def delete_session(self, raddr, ident):
+        session_id = self._get_session_id(raddr, ident)
+        auditlog.debug("{1}.{2} Deleting session '{0}'.".format(session_id, *raddr))
+        self.sessions.pop(session_id)
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            logger.info("0.0.0.0.0 Starting Radius Server on {}:{}".format(self.bind_addr, self.auth_port))
+            serverlog.info("Starting Auth Server on {0}:{1}".format(self.bind_addr, self.auth_port))
             sock.bind((self.bind_addr, self.auth_port))
             local_addr = sock.getsockname()
-            logger.info("{0}.{1} Started Radius Server.".format(*local_addr))
-            sessions.start()
-            connections.start()
+            serverlog.info("Listening on {0}.{1}".format(*local_addr))
+            cleanup_connections = self.cleanup_connections()
+            cleanup_sessions = self.cleanup_sessions()
             try:
                 while True:
                     data, remote_addr = sock.recvfrom(self.buff_size)
-                    Thread(target=AuthRequest(sock, remote_addr, data)).start()
+                    threading.Thread(target=AuthRequest(self, sock, remote_addr, data)).start()
             finally:
-                sessions.cancel()
-                connections.cancel()
+                cleanup_connections()
+                cleanup_sessions()
         except socket.error as e:
             exit(e)
         except KeyboardInterrupt:
-            logger.info("Received Keyboard Interrupt. Shutting down.")
+            serverlog.info("Received Keyboard Interrupt. Shutting down.")
         finally:
             sock.close()
+
+
+if __name__ == "__main__":
+    radius_clients = {
+        # Can be a single IP or CIDR
+        '127.0.0.1': 'Kah3choteereethiejeimaeziecumi',
+        '10.0.0.0/16': 'XuMsFsQmfygQJvCg'
+    }
+
+    server = Server(radius_clients)
+    server.start()
