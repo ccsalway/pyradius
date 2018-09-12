@@ -53,7 +53,9 @@ class AuthRequest(object):
                     return 2  # Access-Accept
             # PAP
             elif 'User-Password' in self.attrs:
-                if self.verify_pap_password():
+                if 'State' in self.attrs:  # Challenge Response
+                    pass
+                elif self.verify_pap_password():
                     return 2  # Access-Accept
         except Error as e:
             auditlog.error("{1}.{2} {0}".format(e, *self.raddr))
