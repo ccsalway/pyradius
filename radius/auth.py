@@ -107,7 +107,7 @@ class AuthRequest(object):
         buf = self.req_attrs['User-Password'][0]
         # RFC says length max length == 128 characters but ignoring restriction
         if len(buf) % 16 != 0:
-            raise Error("{0}.{1} Invalid password length.".format(*self.raddr))
+            raise Error("{0}.{1} Invalid User-Password length.".format(*self.raddr))
         pw = six.b('')
         last = self.req_authenticator
         while buf:
@@ -124,7 +124,7 @@ class AuthRequest(object):
         try:
             return plain_pswd == pw.decode('utf-8')
         except UnicodeDecodeError:
-            raise Error("{0}.{1} Invalid password or secret.".format(*self.raddr))
+            raise Error("{0}.{1} Invalid secret or User-Password.".format(*self.raddr))
 
     def verify_chap_password(self):
         """With CHAP, the Secret is not used!"""
@@ -132,7 +132,7 @@ class AuthRequest(object):
         # id, password
         chap_password = self.req_attrs['CHAP-Password'][0]
         if len(chap_password) != 19:  # RFC2865
-            raise Error("{0}.{1} Invalid password length.".format(*self.raddr))
+            raise Error("{0}.{1} Invalid CHAP-Password length.".format(*self.raddr))
         chapid, password = chap_password[0], chap_password[1:]
         # challenge
         chap_challenge = self.req_authenticator

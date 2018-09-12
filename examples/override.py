@@ -11,6 +11,10 @@ clients = {
 
 
 class CustomAuthRequest(AuthRequest):
+    def get_user_password(self):
+        username = self.eap_identity if 'eap_identity' in self.__dict__ else self.username
+        return 'Pa$$word123'
+
     def response_accept(self):
         attrs = OrderedDict({})
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test

@@ -20,7 +20,7 @@ class Attributes:
         8: ("Framed-IP-Address", "ipv4addr"),
         9: ("Framed-IP-Netmask", "ipv4addr"),
         10: ("Framed-Routing", "enum"),
-        11: ("Filter-Id", "text"),  # length >= 3
+        11: ("Filter-Id", "text"),
         12: ("Framed-MTU", "integer"),
         13: ("Framed-Compression", "enum"),
         14: ("Login-IP-Host", "ipv4addr"),
