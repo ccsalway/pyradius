@@ -11,23 +11,14 @@ class AuthRequest(object):
     username = None
     eap_identity = None
 
-    def __init__(self, raddr, attrs, authenticator, secret):
+    def __init__(self, server, raddr, attrs, authenticator, secret):
+        self.server = server
         self.attrs = attrs
         self.raddr = raddr
         self.authenticator = authenticator
         self.secret = secret
 
     def __call__(self):
-        self.result = result = self.check_access()
-        if result == 2:
-            auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
-        elif result == 11:
-            auditlog.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
-        else:
-            auditlog.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
-        return self
-
-    def check_access(self):
         try:
             # Message Authenticator
             if 'Message-Authenticator' in self.attrs:
@@ -50,16 +41,25 @@ class AuthRequest(object):
             # CHAP
             elif 'CHAP-Password' in self.attrs:
                 if self.verify_chap_password():
-                    return 2  # Access-Accept
+                    self.auditlog('Access-Accept')
+                    return AUTH_ACCEPT
             # PAP
             elif 'User-Password' in self.attrs:
                 if 'State' in self.attrs:  # Challenge Response
-                    pass
+                    # contains the attributes sent in the previous access-request
+                    state = self.server.get_and_delete_session(self.raddr, self.attrs['State'])
+                    if state:
+                        pass
                 elif self.verify_pap_password():
-                    return 2  # Access-Accept
+                    self.auditlog('Access-Accept')
+                    return AUTH_ACCEPT
         except Error as e:
             auditlog.error("{1}.{2} {0}".format(e, *self.raddr))
-        return 3  # Access-Reject
+        self.auditlog('Access-Reject')
+        return AUTH_REJECT
+
+    def auditlog(self, code):
+        auditlog.info("{2}.{3} {0} for '{1}'.".format(code, self.username, *self.raddr))
 
     def unpack_eap_message(self):
         eap_msg = ''.join(self.attrs['EAP-Message'])  # EAP-Message attribute (concat)

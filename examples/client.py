@@ -2,9 +2,12 @@ import os
 import random
 import socket
 from hashlib import md5
+from select import select
+
 import six
-from attributes import *
-from logger import clientlog
+
+from radius.attributes import *
+from radius.logger import clientlog
 
 addr = '127.0.0.1'
 auth_port = 1812
@@ -46,24 +49,31 @@ def encrypt_pap_password(password, secret, authenticator):
 
 
 ident = request_ident()
+
 authenticator = request_authenticator()
+
 attrs = OrderedDict({
     'NAS-Identifier': 'client',
     'User-Name': 'fakeusername',
     'User-Password': encrypt_pap_password('fakepassword', secret, authenticator),
 })
+
 pattrs = attributes.pack_attributes(attrs)
 
 data = [pack_header(AUTH_REQUEST, ident, len(pattrs), authenticator), pattrs]
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 try:
+    print("Sending: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs])))
     sock.sendto(b''.join(data), (addr, auth_port))
 
-    data, raddr = sock.recvfrom(buff_size)
-
-    attrs = attributes.unpack_attributes(data[20:])
-    print("{1}.{2} Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *raddr))
+    r, w, x = select([sock], [], [], 10)
+    if sock in r:
+        data, raddr = sock.recvfrom(buff_size)
+        attrs = attributes.unpack_attributes(data[20:])
+        print("Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs])))
+    else:
+        print("Timed out waiting for response.")
 
 except socket.error as e:
     exit(e)
@@ -71,3 +81,4 @@ except KeyboardInterrupt:
     clientlog.info("Received Keyboard Interrupt. Shutting down.")
 finally:
     sock.close()
+    print("Closed connection.")

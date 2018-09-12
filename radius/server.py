@@ -84,24 +84,15 @@ class Server(object):
         threading.Thread(target=loop).start()
         return stopped.set
 
-    def _get_session_id(self, raddr, ident):
-        return 'sess.{}.{}.{}'.format(raddr[0], raddr[1], ident)
-
-    def get_session(self, raddr, ident):
-        session_id = self._get_session_id(raddr, ident)
-        auditlog.debug("{1}.{2} Getting session '{0}'.".format(session_id, *raddr))
-        return self.sessions.get(session_id, None)
-
     def create_session(self, raddr, ident, attr):
-        session_id = self._get_session_id(raddr, ident)
+        session_id = 'sess.{}.{}.{}'.format(raddr[0], raddr[1], ident)
         auditlog.debug("{1}.{2} Saving session '{0}'.".format(session_id, *raddr))
         self.sessions[session_id] = (time.time(), attr)
         return session_id
 
-    def delete_session(self, raddr, ident):
-        session_id = self._get_session_id(raddr, ident)
-        auditlog.debug("{1}.{2} Deleting session '{0}'.".format(session_id, *raddr))
-        self.sessions.pop(session_id, None)
+    def get_and_delete_session(self, raddr, session_id):
+        auditlog.debug("{1}.{2} Getting session '{0}'.".format(session_id, *raddr))
+        return self.sessions.pop(session_id, None)
 
     #
     # Start
@@ -163,18 +154,14 @@ class Server(object):
             # process
             self.status_starting(raddr, ident)
             try:
-                # Access-Request
-                if code == 1:
-                    auth = self.auth_request(raddr, attrs, authenticator, secret)()
-                    # Access-Accept
-                    if auth.result == 2:
+                if code == AUTH_REQUEST:
+                    result = self.auth_request(self, raddr, attrs, authenticator, secret)()
+                    if result == AUTH_ACCEPT:
                         resp_attrs = self.access_accept(attrs)
-                    # Access-Challenge
-                    elif auth.result == 11:
+                    elif result == AUTH_CHALLENGE:
                         session_id = self.create_session(raddr, ident, attrs)
                         resp_attrs = self.access_challenge(session_id, attrs)
-                    # Access-Reject
-                    else:
+                    else:  # AUTH_REJECT
                         resp_attrs = self.access_reject(attrs)
                     # Send Response
                     self.send_response(sock, raddr, ident, code, authenticator, resp_attrs, secret)
