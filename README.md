@@ -1,4 +1,4 @@
-A RADIUS server based on [RFC2865](https://tools.ietf.org/html/rfc2865#section-5.11).
+A RADIUS server based on [RFC2865](https://tools.ietf.org/html/rfc2865).
 
 Supports:
 * PAP
