@@ -15,11 +15,11 @@ attributes = Attributes()
 class AuthRequest(object):
     def __init__(self, server, sock, remote_addr, data):
         self.server = server
+        self.clients = server.clients
         self.sock = sock
         self.raddr = remote_addr
         self.data = data
         self.length = len(data)
-        self.clients = server.clients
 
     def lookup_host(self):
         ip_addr = IPAddress(self.raddr[0])
@@ -105,18 +105,29 @@ class AuthRequest(object):
     def verify_pap_password(self):
         plain_pswd = self.get_user_password()
         buf = self.req_attrs['User-Password'][0]
+        # RFC says length max length == 128 characters but ignoring restriction
+        if len(buf) % 16 != 0:
+            raise Error("{0}.{1} Invalid password length.".format(*self.raddr))
         pw = six.b('')
         last = self.req_authenticator
         while buf:
             _hash = md5(self.secret + last).digest()
-            for i in range(16):
-                pw += chr(ord(_hash[i]) ^ ord(buf[i]))
+            if six.PY3:
+                for i in range(16):
+                    pw += bytes((_hash[i] ^ buf[i],))
+            else:
+                for i in range(16):
+                    pw += chr(ord(_hash[i]) ^ ord(buf[i]))
             (last, buf) = (buf[:16], buf[16:])
         while pw.endswith(six.b('\x00')):
             pw = pw[:-1]
-        return plain_pswd == pw.decode('utf-8')
+        try:
+            return plain_pswd == pw.decode('utf-8')
+        except UnicodeDecodeError:
+            raise Error("{0}.{1} Invalid password or secret.".format(*self.raddr))
 
     def verify_chap_password(self):
+        """With CHAP, the Secret is not used!"""
         plain_pswd = self.get_user_password()
         # id, password
         chap_password = self.req_attrs['CHAP-Password'][0]
@@ -174,7 +185,7 @@ class AuthRequest(object):
                 self.server.status_starting(self.raddr, self.req_ident)
                 try:
                     if self.req_code == ACCESS_REQUEST:
-                        self.process_access_request()
+                        return self.process_access_request()
                 finally:
                     self.server.status_finished(self.raddr, self.req_ident)
         except Info as e:
@@ -183,6 +194,8 @@ class AuthRequest(object):
             auditlog.error(e.message)
         except Exception as e:
             serverlog.exception(e)
+        # default reject
+        return self.process_response(ACCESS_REJECT)
 
     def process_access_request(self):
         # Message Authenticator
@@ -206,13 +219,11 @@ class AuthRequest(object):
         # CHAP
         elif 'CHAP-Password' in self.req_attrs:
             if self.verify_chap_password():
-                return self.process_response(ACCESS_ACCEPT)
+                self.process_response(ACCESS_ACCEPT)
         # PAP
         elif 'User-Password' in self.req_attrs:
             if self.verify_pap_password():
-                return self.process_response(ACCESS_ACCEPT)
-        # default reject
-        return self.process_response(ACCESS_REJECT)
+                self.process_response(ACCESS_ACCEPT)
 
     #
     # RESPONSE
@@ -230,7 +241,6 @@ class AuthRequest(object):
 
     def response_accept(self, attrs):
         auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
-        attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
         data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]

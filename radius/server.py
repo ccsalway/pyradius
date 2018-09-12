@@ -16,6 +16,8 @@ class Server(object):
     sessions_interval = 5
     session_timeout = 600
 
+    auth_request = AuthRequest
+
     def __init__(self, clients, bind_addr='', auth_port=1812, buff_size=4096):
         self.clients = clients
         self.bind_addr = bind_addr
@@ -51,7 +53,10 @@ class Server(object):
 
     def status_finished(self, raddr, ident):
         auditlog.debug("{0}.{1} Finished processing request.".format(*raddr))
-        self.connections.pop(self._get_connection_id(raddr, ident))
+        try:
+            self.connections.pop(self._get_connection_id(raddr, ident))
+        except KeyError:  # for connections that close at the same time
+            pass
 
     def cleanup_sessions(self):
         """The amount of time allowed to respond to a challenge."""
@@ -86,7 +91,10 @@ class Server(object):
     def delete_session(self, raddr, ident):
         session_id = self._get_session_id(raddr, ident)
         auditlog.debug("{1}.{2} Deleting session '{0}'.".format(session_id, *raddr))
-        self.sessions.pop(session_id)
+        try:
+            self.sessions.pop(session_id)
+        except KeyError:  # for sessions that are deleted at the same time
+            pass
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -101,7 +109,7 @@ class Server(object):
             try:
                 while True:
                     data, remote_addr = sock.recvfrom(self.buff_size)
-                    threading.Thread(target=AuthRequest(self, sock, remote_addr, data)).start()
+                    threading.Thread(target=self.auth_request(self, sock, remote_addr, data)).start()
             finally:
                 cleanup_connections()
                 cleanup_sessions()
