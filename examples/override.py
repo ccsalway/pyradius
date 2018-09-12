@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 from radius.attributes import ACCESS_ACCEPT
 from radius.auth import AuthRequest
+from radius.logger import auditlog
 from radius.server import Server
 
 clients = {
@@ -13,12 +14,13 @@ clients = {
 class CustomAuthRequest(AuthRequest):
     def get_user_password(self):
         username = self.eap_identity if 'eap_identity' in self.__dict__ else self.username
-        return 'Pa$$word123'
+        return 'fakepassword'
 
     def response_accept(self):
+        auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
         attrs = OrderedDict({})
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
-        attrs['Reply-Message'] = ""
+        attrs['Reply-Message'] = "Welcome to RADIUS"
         self.send_response(ACCESS_ACCEPT, attrs)
 
 

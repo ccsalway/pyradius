@@ -90,7 +90,7 @@ class AuthRequest(object):
             name = attributes.get_name(code)
             attrs.setdefault(name, []).append(value)
             pos += length
-        auditlog.debug("{1}.{2} {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *self.raddr))
+        auditlog.debug("{1}.{2} Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *self.raddr))
         self.req_attrs = attrs
 
     def unpack_eap_message(self):
@@ -132,7 +132,8 @@ class AuthRequest(object):
         # id, password
         chap_password = self.req_attrs['CHAP-Password'][0]
         if len(chap_password) != 19:  # RFC2865
-            raise Error("{0}.{1} Invalid CHAP-Password length.".format(*self.raddr))
+            # raise Error("{1}.{2} Invalid CHAP-Password length ({0}).".format(len(chap_password), *self.raddr))
+            auditlog.warning("{1}.{2} Invalid CHAP-Password length {0}, should be 19.".format(len(chap_password), *self.raddr))
         chapid, password = chap_password[0], chap_password[1:]
         # challenge
         chap_challenge = self.req_authenticator
@@ -268,7 +269,7 @@ class AuthRequest(object):
         self.send_response(ACCESS_CHALLENGE, attrs)
 
     def send_response(self, code, attrs):
-        auditlog.debug("{1}.{2} {0}".format(attrs, *self.raddr))
+        auditlog.debug("{1}.{2} Sending: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *self.raddr))
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(code, attrs)
         data = [self.pack_header(code, len(attrs), resp_auth), attrs]
