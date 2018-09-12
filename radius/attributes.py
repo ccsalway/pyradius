@@ -1,7 +1,11 @@
-ACCESS_REQUEST = 1
-ACCESS_ACCEPT = 2
-ACCESS_REJECT = 3
-ACCESS_CHALLENGE = 12
+from struct import pack, unpack
+from netaddr import IPAddress, IPNetwork
+from collections import OrderedDict
+
+AUTH_REQUEST = 1
+AUTH_ACCEPT = 2
+AUTH_REJECT = 3
+AUTH_CHALLENGE = 12
 ACCT_REQUEST = 5
 ACCT_RESPONSE = 11
 
@@ -428,3 +432,73 @@ class Attributes:
         for k, v in opts.items():
             if v == text:
                 return k
+
+    def pack_attributes(self, attrs):
+        if not attrs:
+            return b''
+        data = []
+        for name, values in attrs.items():
+            if not isinstance(values, list):
+                values = [values]
+            for value in values:
+                code = self.get_code(name)
+                if code is None:
+                    raise AttributeError("Unknown attribute name '{}'".format(name))
+                val = self.encode_attribute(code, value)
+                length = len(val)
+                data.append(pack('!BB{}s'.format(length), code, length + 2, val))
+        return b''.join(data)
+
+    def unpack_attributes(self, data):
+        # code(1), length(2), value(length-3)
+        pos, attrs = 0, OrderedDict({})
+        while pos < len(data):
+            code, length = unpack('!BB', data[pos:pos + 2])
+            value = self.decode_attribute(code, data[pos + 2:pos + length])
+            name = self.get_name(code)
+            attrs.setdefault(name, []).append(value)
+            pos += length
+        return attrs
+
+    def encode_attribute(self, code, value):
+        typ = self.get_type(code)
+        if typ in ('text', 'string', 'concat'):
+            try:
+                if typ == 'concat':
+                    value = b''.join(value)
+                return value.encode('utf-8')
+            except UnicodeDecodeError:
+                return value
+        elif typ == 'integer':
+            return pack('!I', int(value))
+        elif typ == "ipv4addr":
+            return IPAddress(value).packed
+        elif typ == "enum":
+            return pack('!I', self.get_enum_code(code, value))
+        return value
+
+    def decode_attribute(self, code, value):
+        typ = self.get_type(code)
+        if typ in ('text', 'string'):
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+        elif typ == 'integer':
+            value = unpack('!I', value)[0]
+        elif typ == 'ipv4addr':
+            value = '.'.join(map(str, unpack('!BBBB', value)))
+        elif typ == 'ipv6addr':
+            addr = value + b'\x00' * (16 - len(value))
+            prefix = ':'.join(map('{0:x}'.format, unpack('!' + 'H' * 8, addr)))
+            value = str(IPAddress(prefix))
+        elif typ == 'ipv6prefix':
+            addr = value + b'\x00' * (18 - len(value))
+            _, length, prefix = ':'.join(map('{0:x}'.format, unpack('!BB' + 'H' * 8, addr))).split(":", 2)
+            value = str(IPNetwork("%s/%s" % (prefix, int(length, 16))))
+        elif typ == 'ifid':
+            pass  # ??
+        elif typ == 'enum':
+            key = unpack('!I', value)[0]
+            value = self.get_enum_text(code, key)
+        return value
