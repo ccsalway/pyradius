@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+from radius.attributes import ACCESS_ACCEPT
 from radius.auth import AuthRequest
 from radius.server import Server
 
@@ -13,8 +14,8 @@ class CustomAuthRequest(AuthRequest):
     def response_accept(self):
         attrs = OrderedDict({})
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
-        attrs['Response-Message'] = "Access granted"
-        self.send_response(attrs)
+        attrs['Reply-Message'] = "Access granted"
+        self.send_response(ACCESS_ACCEPT, attrs)
 
 
 server = Server(clients)

@@ -161,6 +161,8 @@ class AuthRequest(object):
             return b''
         data = []
         for name, values in attrs.items():
+            if not isinstance(values, list):
+                values = [values]
             for value in values:
                 code = attributes.get_code(name)
                 if code is None:
@@ -189,7 +191,9 @@ class AuthRequest(object):
                 self.server.status_starting(self.raddr, self.req_ident)
                 try:
                     if self.req_code == ACCESS_REQUEST:
-                        return self.process_access_request()
+                        if self.process_access_request():
+                            return self.process_response(ACCESS_ACCEPT)
+                    raise Error("{1}.{2} Discarded request.  Unhandled/Unknown request code {0}".format(self.req_code, *self.raddr))
                 finally:
                     self.server.status_finished(self.raddr, self.req_ident)
         except Info as e:
@@ -224,12 +228,11 @@ class AuthRequest(object):
                 auditlog.debug("{1}.{2} EAP-Identity: {0}".format(repr(self.eap_identity), *self.raddr))
         # CHAP
         elif 'CHAP-Password' in self.req_attrs:
-            if self.verify_chap_password():
-                self.process_response(ACCESS_ACCEPT)
+            return self.verify_chap_password()
         # PAP
         elif 'User-Password' in self.req_attrs:
-            if self.verify_pap_password():
-                self.process_response(ACCESS_ACCEPT)
+            return self.verify_pap_password()
+        return False
 
     #
     # RESPONSE
@@ -241,7 +244,7 @@ class AuthRequest(object):
         elif code == ACCESS_REJECT:
             self.response_reject()
         elif code == ACCESS_CHALLENGE:
-            self.response_reject()
+            self.response_challenge()
 
     def response_accept(self):
         auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
@@ -265,6 +268,7 @@ class AuthRequest(object):
         self.send_response(ACCESS_CHALLENGE, attrs)
 
     def send_response(self, code, attrs):
+        auditlog.debug("{1}.{2} {0}".format(attrs, *self.raddr))
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(code, attrs)
         data = [self.pack_header(code, len(attrs), resp_auth), attrs]
