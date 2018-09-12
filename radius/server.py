@@ -53,10 +53,7 @@ class Server(object):
 
     def status_finished(self, raddr, ident):
         auditlog.debug("{0}.{1} Finished processing request.".format(*raddr))
-        try:
-            self.connections.pop(self._get_connection_id(raddr, ident))
-        except KeyError:  # for connections that close at the same time
-            pass
+        self.connections.pop(self._get_connection_id(raddr, ident), None)
 
     def cleanup_sessions(self):
         """The amount of time allowed to respond to a challenge."""
@@ -91,10 +88,7 @@ class Server(object):
     def delete_session(self, raddr, ident):
         session_id = self._get_session_id(raddr, ident)
         auditlog.debug("{1}.{2} Deleting session '{0}'.".format(session_id, *raddr))
-        try:
-            self.sessions.pop(session_id)
-        except KeyError:  # for sessions that are deleted at the same time
-            pass
+        self.sessions.pop(session_id, None)
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

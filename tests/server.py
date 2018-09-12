@@ -18,5 +18,5 @@ class CustomAuthRequest(AuthRequest):
 
 
 server = Server(clients)
-#server.auth_request = CustomAuthRequest
+server.auth_request = CustomAuthRequest
 server.start()
