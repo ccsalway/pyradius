@@ -6,8 +6,8 @@ Supports:
 * EAP (coming)
 
 Some conditions different to RFC2865:
-* supports Message-Authenticator (coming)
 * no minimum or maximum size of attributes
 * no maximum length of secret
+* supports Message-Authenticator (coming)
 
 See examples for usage.
