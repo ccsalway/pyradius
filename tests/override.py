@@ -1,4 +1,5 @@
-from radius.attributes import *
+from collections import OrderedDict
+
 from radius.auth import AuthRequest
 from radius.server import Server
 
@@ -9,14 +10,10 @@ clients = {
 
 
 class CustomAuthRequest(AuthRequest):
-    def response_accept(self, attrs):
+    def response_accept(self):
+        attrs = OrderedDict({})
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
-
-    def send_response(self, attrs):
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
-        data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
+        self.send_response(attrs)
 
 
 server = Server(clients)

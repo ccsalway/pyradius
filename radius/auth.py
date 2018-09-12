@@ -249,7 +249,7 @@ class AuthRequest(object):
 
     def response_challenge(self):
         """
-        :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
+        :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
         """
         auditlog.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
         attrs = OrderedDict({})
