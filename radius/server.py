@@ -1,16 +1,9 @@
-import logging
 import socket
 import threading
 import time
 
 from auth import AuthRequest
-
-logging.basicConfig(level="DEBUG", format="%(asctime)s %(name)s %(levelname)s %(message)s")
-
-serverlog = logging.getLogger('server')
-auditlog = logging.getLogger('audit')
-
-lock = threading.Lock()
+from logger import *
 
 
 class Server(object):

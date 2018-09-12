@@ -1,4 +1,3 @@
-import logging
 from collections import OrderedDict
 from hashlib import md5
 from struct import pack, unpack
@@ -7,10 +6,8 @@ import six
 from netaddr import IPAddress, IPNetwork
 
 from attributes import *
-from error import *
-
-serverlog = logging.getLogger('server')
-auditlog = logging.getLogger('audit')
+from error import Error, Info
+from logger import serverlog, auditlog
 
 attributes = Attributes()
 
