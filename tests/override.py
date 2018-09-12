@@ -1,6 +1,6 @@
-from radius.server import Server
+from radius.attributes import *
 from radius.auth import AuthRequest
-from radius.attributes import ACCESS_ACCEPT
+from radius.server import Server
 
 clients = {
     # Can be a single IP or CIDR
@@ -11,6 +11,8 @@ clients = {
 class CustomAuthRequest(AuthRequest):
     def response_accept(self, attrs):
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
+
+    def send_response(self, attrs):
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
         data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]

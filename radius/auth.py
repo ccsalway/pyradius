@@ -230,39 +230,36 @@ class AuthRequest(object):
     #
 
     def process_response(self, code):
-        attrs = OrderedDict({})
-        # response
         if code == ACCESS_ACCEPT:
-            self.response_accept(attrs)
+            self.response_accept()
         elif code == ACCESS_REJECT:
-            self.response_reject(attrs)
+            self.response_reject()
         elif code == ACCESS_CHALLENGE:
-            self.response_reject(attrs)
+            self.response_reject()
 
-    def response_accept(self, attrs):
+    def response_accept(self):
         auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
+        attrs = OrderedDict({})
+        self.send_response(attrs)
+
+    def response_reject(self):
+        auditlog.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
+        attrs = OrderedDict({})
+        self.send_response(attrs)
+
+    def response_challenge(self):
+        """
+        :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
+        """
+        auditlog.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
+        attrs = OrderedDict({})
+        attrs['State'] = self.server.create_session(self.raddr, self.req_ident, self.req_attrs)
+        attrs['Session-Timeout'] = self.server.session_timeout
+        attrs['Reply-Message'] = 'Challenge to your auth request.'
+        self.send_response(attrs)
+
+    def send_response(self, attrs):
         attrs = self.pack_attributes(attrs)
         resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
         data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
-
-    def response_reject(self, attrs):
-        auditlog.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_REJECT, attrs)
-        data = [self.pack_header(ACCESS_REJECT, len(attrs), resp_auth), attrs]
-        self.sock.sendto(b''.join(data), self.raddr)
-
-    def response_challenge(self, attrs):
-        """
-        :param attrs: Only 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State' are allowed.
-        """
-        auditlog.info("{1}.{2} ACCESS_CHALLENGE for '{0}'".format(self.username, *self.raddr))
-        session_id = self.server.create_session(self.raddr, self.req_ident, self.req_attrs)
-        attrs['State'] = session_id
-        attrs['Session-Timeout'] = self.server.session_timeout
-        attrs['Reply-Message'] = 'Challenge to your auth request.'
-        attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_CHALLENGE, attrs)
-        data = [self.pack_header(ACCESS_CHALLENGE, len(attrs), resp_auth), attrs]
         self.sock.sendto(b''.join(data), self.raddr)
