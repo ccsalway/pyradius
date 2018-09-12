@@ -1,4 +1,4 @@
-A RADIUS server based on RFC2865.
+A RADIUS server based on [RFC2865](https://tools.ietf.org/html/rfc2865#section-5.11).
 
 Supports:
 * PAP
@@ -11,7 +11,3 @@ Some conditions different to RFC2865:
 * no maximum length of secret
 
 See examples for usage.
-
-References:
-
-[RFC 2865 RADIUS](https://tools.ietf.org/html/rfc2865#section-5.11)
