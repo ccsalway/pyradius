@@ -116,8 +116,7 @@ class Server(object):
 if __name__ == "__main__":
     radius_clients = {
         # Can be a single IP or CIDR
-        '127.0.0.1': 'Kah3choteereethiejeimaeziecumi',
-        '10.0.0.0/16': 'XuMsFsQmfygQJvCg'
+        '127.0.0.1': 'aXY8mAc4Bqi4G4tyyRgb0cwn8F1ee3oqyQWi8GE81#cANOuxAtCCL6LxxoVHwDrB',
     }
 
     server = Server(radius_clients)
