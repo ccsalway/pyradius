@@ -13,6 +13,7 @@ class CustomAuthRequest(AuthRequest):
     def response_accept(self):
         attrs = OrderedDict({})
         attrs['NAS-Identifier'] = self.req_attrs['NAS-Identifier']  # echo test
+        attrs['Response-Message'] = "Access granted"
         self.send_response(attrs)
 
 

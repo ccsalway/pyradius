@@ -131,6 +131,8 @@ class AuthRequest(object):
         plain_pswd = self.get_user_password()
         # id, password
         chap_password = self.req_attrs['CHAP-Password'][0]
+        if len(chap_password) != 19:  # RFC2865
+            raise Error("{0}.{1} Invalid password length.".format(*self.raddr))
         chapid, password = chap_password[0], chap_password[1:]
         # challenge
         chap_challenge = self.req_authenticator
@@ -161,6 +163,8 @@ class AuthRequest(object):
         for name, values in attrs.items():
             for value in values:
                 code = attributes.get_code(name)
+                if code is None:
+                    raise AttributeError("Unknown attribute name '{}'".format(name))
                 val = self.encode_attribute(code, value)
                 length = len(val)
                 data.append(pack('!BB{}s'.format(length), code, length + 2, val))
@@ -192,6 +196,8 @@ class AuthRequest(object):
             auditlog.info(e.message)
         except Error as e:
             auditlog.error(e.message)
+        except AttributeError as e:
+            serverlog.error(e)
         except Exception as e:
             serverlog.exception(e)
         # default reject
@@ -240,12 +246,12 @@ class AuthRequest(object):
     def response_accept(self):
         auditlog.info("{1}.{2} ACCESS_ACCEPT for '{0}'".format(self.username, *self.raddr))
         attrs = OrderedDict({})
-        self.send_response(attrs)
+        self.send_response(ACCESS_ACCEPT, attrs)
 
     def response_reject(self):
         auditlog.info("{1}.{2} ACCESS_REJECT for '{0}'".format(self.username, *self.raddr))
         attrs = OrderedDict({})
-        self.send_response(attrs)
+        self.send_response(ACCESS_REJECT, attrs)
 
     def response_challenge(self):
         """
@@ -256,10 +262,10 @@ class AuthRequest(object):
         attrs['State'] = self.server.create_session(self.raddr, self.req_ident, self.req_attrs)
         attrs['Session-Timeout'] = self.server.session_timeout
         attrs['Reply-Message'] = 'Challenge to your auth request.'
-        self.send_response(attrs)
+        self.send_response(ACCESS_CHALLENGE, attrs)
 
-    def send_response(self, attrs):
+    def send_response(self, code, attrs):
         attrs = self.pack_attributes(attrs)
-        resp_auth = self.response_authenticator(ACCESS_ACCEPT, attrs)
-        data = [self.pack_header(ACCESS_ACCEPT, len(attrs), resp_auth), attrs]
+        resp_auth = self.response_authenticator(code, attrs)
+        data = [self.pack_header(code, len(attrs), resp_auth), attrs]
         self.sock.sendto(b''.join(data), self.raddr)

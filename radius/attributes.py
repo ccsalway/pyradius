@@ -7,11 +7,12 @@ ACCT_RESPONSE = 11
 
 
 class Attributes:
+    # https://tools.ietf.org/html/rfc2865
     # https://www.iana.org/assignments/radius-types/radius-types.txt
     CODED = {
-        1: ("User-Name", "text"),
-        2: ("User-Password", "string"),
-        3: ("CHAP-Password", "string"),
+        1: ("User-Name", "text"),  # length: 3,+
+        2: ("User-Password", "string"),  # length: 18, 130
+        3: ("CHAP-Password", "string"),  # length: 19
         4: ("NAS-IP-Address", "ipv4addr"),
         5: ("NAS-Port", "integer"),
         6: ("Service-Type", "enum"),
