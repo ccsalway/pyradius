@@ -20,13 +20,13 @@ class Attributes:
         8: ("Framed-IP-Address", "ipv4addr"),
         9: ("Framed-IP-Netmask", "ipv4addr"),
         10: ("Framed-Routing", "enum"),
-        11: ("Filter-Id", "text"),
+        11: ("Filter-Id", "text"),  # length >= 3
         12: ("Framed-MTU", "integer"),
         13: ("Framed-Compression", "enum"),
         14: ("Login-IP-Host", "ipv4addr"),
         15: ("Login-Service", "enum"),
         16: ("Login-TCP-Port", "integer"),
-        18: ("Reply-Message", "text"),
+        18: ("Reply-Message", "text"),  # length: >= 3
         19: ("Callback-Number", "text"),
         20: ("Callback-Id", "text"),
         22: ("Framed-Route", "text"),
