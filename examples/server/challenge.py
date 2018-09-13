@@ -33,9 +33,13 @@ class CustomAuthRequest(AuthRequest):
         return totp.now()
 
     def verify_challenge(self):
-        state = self.server.get_session(self.attrs['State'][0], self.raddr)
-        if not state:
-            auditlog.debug("{0}.{1} State not found or expired.".format(*self.raddr))
+        session_data = self.server.get_session(self.attrs['State'][0], self.raddr)
+        if not session_data:
+            auditlog.debug("{0}.{1} Session not found or expired.".format(*self.raddr))
+            return False
+        # check usernames match
+        if session_data != self.username:
+            auditlog.debug("{0}.{1} Challenge-Response username different.".format(*self.raddr))
             return False
         # current TOTP code
         totp = self.get_user_totp()
@@ -51,8 +55,12 @@ class CustomAuthRequest(AuthRequest):
 
 class CustomServer(Server):
     def access_challenge(self, req_attrs, raddr):
+        """
+        We save the User-Name in session for comparison to ensure the user
+        doesn't log in with one user initially and another for MFA.
+        """
         attrs = OrderedDict({})
-        attrs['State'] = self.create_session('TOTP', raddr)
+        attrs['State'] = self.create_session(req_attrs['User-Name'][0], raddr)
         attrs['Session-Timeout'] = self.session_timeout
         attrs['Reply-Message'] = 'Secret: '
         return attrs
