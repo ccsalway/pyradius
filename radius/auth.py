@@ -32,8 +32,11 @@ class AuthRequest(object):
             # Challenge Response
             if 'State' in self.attrs:
                 if self.verify_challenge():
-                    self.auditlog('Access-Accept')
+                    self.auditlog('Access-Accept-Challenge')
                     return AUTH_ACCEPT
+                else:
+                    self.auditlog('Access-Reject-Challenge')
+                    return AUTH_REJECT
             # EAP
             elif 'EAP-Message' in self.attrs:
                 if 'Message-Authenticator' not in self.attrs:

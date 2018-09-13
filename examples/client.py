@@ -31,6 +31,7 @@ def pack_header(code, ident, length_attrs, authenticator):
 
 
 def encrypt_pap_password(password, secret, authenticator):
+    password = str(password)
     buf = password
     if len(password) % 16 != 0:
         buf += six.b('\x00') * (16 - (len(password) % 16))
@@ -48,14 +49,16 @@ def encrypt_pap_password(password, secret, authenticator):
     return result
 
 
+nas_ident = 'client'
+username = 'fakeusername'
+password = 'fakepassword'
+
 ident = request_ident()
-
 authenticator = request_authenticator()
-
 attrs = OrderedDict({
-    'NAS-Identifier': 'client',
-    'User-Name': 'fakeusername',
-    'User-Password': encrypt_pap_password('fakepassword', secret, authenticator),
+    'NAS-Identifier': nas_ident,
+    'User-Name': username,
+    'User-Password': encrypt_pap_password(password, secret, authenticator),
 })
 
 pattrs = attributes.pack_attributes(attrs)
@@ -79,6 +82,40 @@ try:
             print("Received: {}".format(CODES[resp_code]))
             resp_attrs = attributes.unpack_attributes(data[20:resp_length])  # attributes
             print("Received: {0}".format(', '.join(['{}: {}'.format(k, resp_attrs[k]) for k in resp_attrs])))
+
+            if resp_code == AUTH_CHALLENGE:
+                text = 'Enter your challenge response: '
+                if 'Reply-Message' in resp_attrs:
+                    text = resp_attrs['Reply-Message'][0]
+                response = input(text)
+
+                # send challenge response
+                attrs = OrderedDict({
+                    'NAS-Identifier': nas_ident,
+                    'User-Name': username,
+                    'User-Password': encrypt_pap_password(response, secret, authenticator),
+                    'State': resp_attrs['State'][0],
+                })
+                pattrs = attributes.pack_attributes(attrs)
+                data = [pack_header(AUTH_REQUEST, ident, len(pattrs), authenticator), pattrs]
+
+                print("Sending: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs])))
+                sock.sendto(b''.join(data), (addr, auth_port))
+
+                r, w, x = select([sock], [], [], 10)
+                if sock in r:
+                    data, raddr = sock.recvfrom(buff_size)
+
+                    resp_code, resp_ident, resp_length = unpack('!BBH', data[:4])  # header
+
+                    if resp_ident != ident:
+                        print("Mismatch identity. Discarding response.")
+                    else:
+                        print("Received: {}".format(CODES[resp_code]))
+                        resp_attrs = attributes.unpack_attributes(data[20:resp_length])  # attributes
+                        print("Received: {0}".format(', '.join(['{}: {}'.format(k, resp_attrs[k]) for k in resp_attrs])))
+
+
     else:
         print("Timed out waiting for response.")
 

@@ -1,47 +1,60 @@
+import pyotp
+
 from radius.attributes import *
 from radius.auth import AuthRequest
-from radius.server import Server
 from radius.logger import auditlog
-import pyotp
+from radius.server import Server
+
 
 class CustomAuthRequest(AuthRequest):
     def __call__(self):
+        """
+        If initial login successful, we want to challenge the user's MFA.
+        'State' is not in the initial Access-Request. It MUST be passed back
+         in with the response to the Auth-Challenge for the response to be verified.
+        """
         result = self.authenticate()
-        if 'State' not in self.attrs and result == AUTH_ACCEPT:
-            """After initial successful login, we want to challenge the user with MFA."""
+        if result == AUTH_ACCEPT and 'State' not in self.attrs:
             result = AUTH_CHALLENGE
         return result
 
+    def get_username(self):
+        if 'eap_identity' in self.__dict__:
+            return self.eap_identity
+        return self.username
+
     def get_user_password(self):
-        username = self.eap_identity if 'eap_identity' in self.__dict__ else self.username
+        username = self.get_username()  # can be used to do a pswd lookup
         return 'fakepassword'
 
-    def get_mfa_code(self):
+    def get_user_totp(self):
+        username = self.get_username()  # can be used to do a TOTP code lookup
         totp = pyotp.TOTP('base32secret3232')
         return totp.now()
 
     def verify_challenge(self):
-        # session contains the previous access-request attributes
         state = self.server.get_session(self.attrs['State'][0], self.raddr)
         if not state:
-            auditlog.info("State not found or expired.")
+            auditlog.debug("{0}.{1} State not found or expired.".format(*self.raddr))
             return False
-        # check response
-        if 'User-Password' in self.attrs:
-            self.verify_pap_password(self.get)
+        # current TOTP code
+        totp = self.get_user_totp()
+        # compare current TOTP with passed-in
+        if 'CHAP-Password' in self.attrs:
+            if self.verify_chap_password(totp):
+                return True
+        elif 'User-Password' in self.attrs:
+            if self.verify_pap_password(totp):
+                return True
         return False
 
 
 class CustomServer(Server):
-    def access_challenge(self, req_attrs, session_id):
-        """Build the attributes to send in an Access-Challenge.
-        :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
-        """
+    def access_challenge(self, req_attrs, raddr):
         attrs = OrderedDict({})
-        attrs['State'] = session_id
+        attrs['State'] = self.create_session('TOTP', raddr)
         attrs['Session-Timeout'] = self.session_timeout
-        attrs['Reply-Message'] = 'Please enter your current MFA secret'
-        attrs['Prompt'] = 'Secret:'
+        attrs['Reply-Message'] = 'Secret: '
         return attrs
 
 

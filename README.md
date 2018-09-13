@@ -6,6 +6,7 @@ Supports:
 * PAP
 * CHAP
 * EAP (coming)
+* Access-Challenge
 
 Some conditions different to RFC2865:
 * no minimum or maximum size of attributes

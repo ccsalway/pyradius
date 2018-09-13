@@ -13,19 +13,20 @@ attributes = Attributes()
 
 
 class Server(object):
-    clients = {}
+    sock_clients = set()
+    radius_clients = {}
     connections = {}
     sessions = {}
 
     connections_interval = 5
     connection_timeout = 10
     sessions_interval = 5
-    session_timeout = 60
+    session_timeout = 300
 
     auth_request = None
 
     def __init__(self, clients, auth_request=AuthRequest, bind_addr='', auth_port=1812, buff_size=4096):
-        self.clients = clients
+        self.radius_clients = clients
         self.auth_request = auth_request
         self.bind_addr = bind_addr
         self.auth_port = auth_port
@@ -78,7 +79,6 @@ class Server(object):
             serverlog.debug("Checking for aged sessions every {} seconds".format(self.sessions_interval))
             while not stopped.wait(self.sessions_interval):
                 for k, v in self.sessions.copy().items():
-                    if not k.startswith('sess.'): continue
                     if time.time() - v[0] > self.session_timeout:
                         serverlog.debug("Removing aged session {}".format(k))
                         self.sessions.pop(k, None)
@@ -87,14 +87,15 @@ class Server(object):
         return stopped.set
 
     def create_session(self, attr, raddr):
-        session_id = os.urandom(16)
+        session_id = os.urandom(32)
         auditlog.debug("{1}.{2} Saving session '{0}'.".format(session_id, *raddr))
         self.sessions[session_id] = (time.time(), attr)
         return session_id
 
     def get_session(self, session_id, raddr):
         auditlog.debug("{1}.{2} Getting session '{0}'.".format(session_id, *raddr))
-        return self.sessions.pop(session_id, None)
+        state = self.sessions.pop(session_id, None)
+        return state[1] if state else None
 
     #
     # Start
@@ -122,13 +123,22 @@ class Server(object):
         except KeyboardInterrupt:
             serverlog.info("Received Keyboard Interrupt. Shutting down.")
         finally:
-            sock.close()
+            for client in self.sock_clients:
+                client.shutdown(socket.SHUT_RDWR)
+                client.close()
 
     #
     # REQUEST
     #
 
+    def lookup_host(self, raddr):
+        ip_addr = IPAddress(raddr[0])
+        for cidr, secret in self.radius_clients.items():
+            if ip_addr in IPNetwork(cidr):
+                return secret
+
     def request_handler(self, sock, raddr, data):
+        self.sock_clients.add(raddr)
         try:
             # check data length
             data_length = len(data)
@@ -137,19 +147,20 @@ class Server(object):
                 raise Error("Discarding request. Data length less than minimum length of 20.")
             # check host known
             secret = self.lookup_host(raddr)
-            if not secret:
-                raise Error("Discarding request. Unknown Host.")
+            if not secret or len(secret) == 0:
+                raise Error("Discarding request. Secret is empty (length 0).")
             # unpack request
             code, ident, length = unpack('!BBH', data[:4])
             if code not in (1, 2, 3, 4, 5, 11, 12, 13, 255):
                 raise Error("Discarding request. Unknown RADIUS code {0}.".format(code))
+            # check length
             if data_length < length:
                 raise Error("Discarding request. Actual length of data is less than specified.")
             # duplicate test
             if self.status_isprocessing(raddr, ident):
                 raise Info("Discarding request. Duplicate request.")
             # request authenticator
-            authenticator = unpack('!16s', data[4:20])[0]  # random 16 numbers 0..255
+            authenticator = unpack('!16s', data[4:20])[0]  # 16 random numbers [0..255]
             # attributes
             attrs = attributes.unpack_attributes(data[20:length])  # ignore out-of-bounds data which could be padding
             auditlog.debug("{1}.{2} Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *raddr))
@@ -161,8 +172,7 @@ class Server(object):
                     if result == AUTH_ACCEPT:
                         resp_attrs = self.access_accept(attrs)
                     elif result == AUTH_CHALLENGE:
-                        session_id = self.create_session(attrs, raddr)
-                        resp_attrs = self.access_challenge(session_id, attrs)
+                        resp_attrs = self.access_challenge(attrs, raddr)
                     else:  # AUTH_REJECT
                         resp_attrs = self.access_reject(attrs)
                     # Send Response
@@ -177,14 +187,8 @@ class Server(object):
             auditlog.error("{1}.{2} {0}".format(e, *raddr))
         except Exception as e:
             serverlog.exception(e)
-
-    def lookup_host(self, raddr):
-        ip_addr = IPAddress(raddr[0])
-        for cidr, secret in self.clients.items():
-            if ip_addr in IPNetwork(cidr):
-                if len(secret) == 0:
-                    raise Error("Discarding request. Secret is empty (length 0).")
-                return secret
+        finally:
+            self.sock_clients.remove(raddr)
 
     #
     # RESPONSE
@@ -198,12 +202,12 @@ class Server(object):
         """Build the attributes to send in an Access-Reject."""
         return OrderedDict({})
 
-    def access_challenge(self, req_attrs, session_id):
+    def access_challenge(self, req_attrs, raddr):
         """Build the attributes to send in an Access-Challenge.
         :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
         """
         attrs = OrderedDict({})
-        # attrs['State'] = session_id
+        # attrs['State'] = self.create_session(attrs, raddr)
         # attrs['Session-Timeout'] = self.session_timeout
         # attrs['Reply-Message'] = 'Challenge xyz. Please send your response.'
         return attrs
