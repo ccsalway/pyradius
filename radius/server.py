@@ -203,11 +203,9 @@ class Server(object):
         return OrderedDict({})
 
     def access_challenge(self, req_attrs, raddr):
-        """Build the attributes to send in an Access-Challenge.
-        :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
-        """
+        """Build the attributes to send in an Access-Challenge."""
         attrs = OrderedDict({})
-        # attrs['State'] = self.create_session(attrs, raddr)
+        # attrs['State'] = self.create_session('Session-Data', raddr)
         # attrs['Session-Timeout'] = self.session_timeout
         # attrs['Reply-Message'] = 'Challenge xyz. Please send your response.'
         return attrs
