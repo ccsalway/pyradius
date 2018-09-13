@@ -2,12 +2,12 @@ from struct import pack, unpack
 from netaddr import IPAddress, IPNetwork
 from collections import OrderedDict
 
-AUTH_REQUEST = 1
-AUTH_ACCEPT = 2
-AUTH_REJECT = 3
-ACCT_REQUEST = 4
-ACCT_RESPONSE = 5
-AUTH_CHALLENGE = 11
+AUTH_REQUEST = 1  # Access-Request
+AUTH_ACCEPT = 2  # Access-Accept
+AUTH_REJECT = 3  # Access-Reject
+ACCT_REQUEST = 4  # Accounting-Request
+ACCT_RESPONSE = 5  # Accounting-Response
+AUTH_CHALLENGE = 11  # Access-Challenge
 STATUS_SERVER = 12
 STATUS_CLIENT = 13
 RESERVED = 255
@@ -29,9 +29,9 @@ class Attributes:
     # https://tools.ietf.org/html/rfc2865
     # https://www.iana.org/assignments/radius-types/radius-types.txt
     CODED = {
-        1: ("User-Name", "text"),  # length: 3,+
-        2: ("User-Password", "string"),  # length: 18, 130
-        3: ("CHAP-Password", "string"),  # length: 19
+        1: ("User-Name", "text"),  # length: >= 3
+        2: ("User-Password", "string"),  # length: 18 - 130
+        3: ("CHAP-Password", "string"),  # length: == 19
         4: ("NAS-IP-Address", "ipv4addr"),
         5: ("NAS-Port", "integer"),
         6: ("Service-Type", "enum"),
@@ -82,7 +82,7 @@ class Attributes:
         53: ("Acct-Output-Gigawords", "integer"),
         55: ("Event-Timestamp", "time"),
         56: ("Egress-VLANID", "integer"),
-        57: ("Ingress-Filters", "enum"),  # TODO: missing enum
+        57: ("Ingress-Filters", "enum"),
         58: ("Egress-VLAN-Name", "text"),
         59: ("User-Priority-Table", "string"),
         60: ("CHAP-Challenge", "string"),
@@ -333,6 +333,10 @@ class Attributes:
             21: "Port-Reinitialized",
             22: "Port-Administratively-Disabled",
             23: "Lost-Power",
+        },
+        57: {
+            1: "Enabled",
+            2: "Disabled"
         },
         61: {
             0: "Async",

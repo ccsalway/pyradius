@@ -5,8 +5,13 @@ from radius.server import Server
 
 
 class CustomAuthRequest(AuthRequest):
+    def get_username(self):
+        if 'eap_identity' in self.__dict__:
+            return self.eap_identity
+        return self.username
+
     def get_user_password(self):
-        username = self.eap_identity if 'eap_identity' in self.__dict__ else self.username
+        username = self.get_username()  # can be used to do a pswd lookup
         return 'fakepassword'
 
 
@@ -15,7 +20,7 @@ class CustomServer(Server):
         attrs = OrderedDict({})
         attrs['Reply-Message'] = "Welcome to RADIUS"
         # echo test
-        attrs['NAS-Identifier'] = req_attrs['NAS-Identifier']
+        attrs['NAS-Port'] = req_attrs['NAS-Port']
         attrs['User-Name'] = req_attrs['User-Name']
         return attrs
 

@@ -1,8 +1,10 @@
+import binascii
 import os
 import socket
 import threading
 import time
 from hashlib import md5
+import hmac, hashlib
 
 from attributes import *
 from auth import AuthRequest
@@ -87,7 +89,7 @@ class Server(object):
         return stopped.set
 
     def create_session(self, attr, raddr):
-        session_id = os.urandom(32)
+        session_id = binascii.hexlify(os.urandom(32))
         auditlog.debug("{1}.{2} Saving session '{0}'.".format(session_id, *raddr))
         self.sessions[session_id] = (time.time(), attr)
         return session_id
@@ -151,6 +153,7 @@ class Server(object):
                 raise Error("Discarding request. Secret is empty (length 0).")
             # unpack request
             code, ident, length = unpack('!BBH', data[:4])
+            auditlog.debug("{3}.{4} Received Code {0} Ident {1} Length {2}".format(code, ident, length, *raddr))
             if code not in (1, 2, 3, 4, 5, 11, 12, 13, 255):
                 raise Error("Discarding request. Unknown RADIUS code {0}.".format(code))
             # check length
@@ -164,6 +167,12 @@ class Server(object):
             # attributes
             attrs = attributes.unpack_attributes(data[20:length])  # ignore out-of-bounds data which could be padding
             auditlog.debug("{1}.{2} Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *raddr))
+            # Check Message-Authenticator
+            if 'Message-Authenticator' in attrs:
+                # Message-Authenticator = HMAC-MD5(Secret, Type + Identifier + Length + RequestAuthenticator + Attributes)
+                message_authenticator = self.message_authenticator(secret, code, ident, attrs.copy(), authenticator)
+                if attrs['Message-Authenticator'][0] != message_authenticator:
+                    raise Error("Discarding request. Invalid Message-Authenticator.")
             # process
             self.status_starting(raddr, ident)
             try:
@@ -175,6 +184,8 @@ class Server(object):
                         resp_attrs = self.access_challenge(attrs, raddr)
                     else:  # AUTH_REJECT
                         resp_attrs = self.access_reject(attrs)
+                    # Add Message-Authenticator
+                    resp_attrs['Message-Authenticator'] = self.message_authenticator(secret, result, ident, resp_attrs, authenticator)
                     # Send Response
                     self.send_response(sock, raddr, ident, result, authenticator, resp_attrs, secret)
                 else:
@@ -215,17 +226,23 @@ class Server(object):
         return pack('!BBH16s', code, ident, 20 + length_attrs, authenticator)
 
     def authenticator(self, code, ident, req_authenticator, attrs, secret):
-        # MD5(Code + ID + Length + RequestAuth + Attributes + Secret) [RFC2865]
+        # MD5(Code + ID + Length + RequestAuth + Attributes + Secret)
         len_attrs, len_secret = len(attrs), len(secret)
-        p = pack('!BBH16s{}s{}s'.format(len_attrs, len_secret),
-                 code, ident, 20 + len_attrs, req_authenticator, attrs, secret)
+        p = pack('!BBH16s{}s{}s'.format(len_attrs, len_secret), code, ident, 20 + len_attrs, req_authenticator, attrs, secret)
         return md5(p).digest()
 
-    def send_response(self, sock, raddr, ident, code, reqauth, attrs, secret):
+    def message_authenticator(self, secret, code, ident, attrs, authenticator):
+        # HMAC_MD5(Secret, Code + ID + Length + RequestAuth + Attributes)
+        attrs['Message-Authenticator'] = 16 * b'\x00'
+        pa = attributes.pack_attributes(attrs)
+        p = pack("!BBH16s{}s".format(len(pa)), code, ident, 20 + len(pa), authenticator, pa)
+        return hmac.new(secret, p).digest()
+
+    def send_response(self, sock, raddr, ident, code, req_authenticator, attrs, secret):
         auditlog.debug("{1}.{2} Sending: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs]), *raddr))
-        attrs = attributes.pack_attributes(attrs)
-        authenticator = self.authenticator(code, ident, reqauth, attrs, secret)
-        data = [self.pack_header(code, ident, len(attrs), authenticator), attrs]
+        pattrs = attributes.pack_attributes(attrs)
+        authenticator = self.authenticator(code, ident, req_authenticator, pattrs, secret)
+        data = [self.pack_header(code, ident, len(pattrs), authenticator), pattrs]
         sock.sendto(b''.join(data), raddr)
 
 

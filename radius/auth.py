@@ -23,9 +23,6 @@ class AuthRequest(object):
 
     def authenticate(self):
         try:
-            # Message Authenticator
-            if 'Message-Authenticator' in self.attrs:
-                pass
             # Username
             if 'User-Name' in self.attrs:
                 self.username = self.attrs['User-Name'][0]
@@ -68,18 +65,22 @@ class AuthRequest(object):
         auditlog.info("{2}.{3} {0} for '{1}'.".format(code, self.username, *self.raddr))
 
     def unpack_eap_message(self):
-        eap_msg = ''.join(self.attrs['EAP-Message'])  # EAP-Message attribute (concat)
+        # https://stackoverflow.com/questions/19097125/how-and-where-radius-and-eap-combine/19100330
+        eap_msg = ''.join(self.attrs['EAP-Message'])
         eap_code, eap_id, length, eap_type = unpack('!BBHB', eap_msg[:5])
         eap_data = unpack('!{}s'.format(length - 5), eap_msg[5:length])[0]
         return eap_code, eap_id, eap_type, eap_data
+
+    def pack_eap_message(self, data):
+        # split into 253-byte EAP-Messages
+        pass
 
     def verify_chap_password(self, plain_password):
         """With CHAP, the Secret is not used!"""
         # id, password
         chap_password = self.attrs['CHAP-Password'][0]
-        if len(chap_password) != 19:  # RFC2865
-            # raise Error("{1}.{2} Invalid CHAP-Password length ({0}).".format(len(chap_password), *self.raddr))
-            auditlog.warning("{1}.{2} Invalid CHAP-Password length {0}, should be 19.".format(len(chap_password), *self.raddr))
+        # if len(chap_password) != 17:
+        #     raise Error("{1}.{2} Invalid CHAP-Password length ({0}).".format(len(chap_password), *self.raddr))
         chapid, chappswd = chap_password[0], chap_password[1:]
         # challenge
         chap_challenge = self.authenticator

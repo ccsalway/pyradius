@@ -1,5 +1,3 @@
-**NOT IN RELEASE STATE AS YET. CHECK BACK REGULARLY.**
-
 A RADIUS server based on [RFC2865](https://tools.ietf.org/html/rfc2865).
 
 Supports:
@@ -11,6 +9,6 @@ Supports:
 Some conditions different to RFC2865:
 * no minimum or maximum size of attributes
 * no maximum length of secret
-* supports Message-Authenticator (coming)
+* supports Message-Authenticator (both ways)
 
 See examples for usage.

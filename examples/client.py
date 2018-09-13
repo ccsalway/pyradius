@@ -3,6 +3,7 @@ import random
 import socket
 from hashlib import md5
 from select import select
+import hmac, hashlib
 
 import six
 
@@ -55,13 +56,17 @@ password = 'fakepassword'
 
 ident = request_ident()
 authenticator = request_authenticator()
+
 attrs = OrderedDict({
     'NAS-Identifier': nas_ident,
     'User-Name': username,
     'User-Password': encrypt_pap_password(password, secret, authenticator),
+    'Message-Authenticator': b'\00x' * 16
 })
-
 pattrs = attributes.pack_attributes(attrs)
+
+message_authenticator = hmac.new(secret, "{}{}{}{}".format(1, 20 + len(pattrs), authenticator, pattrs), hashlib.md5).digest()
+attrs['Message-Authenticator'] = message_authenticator
 
 data = [pack_header(AUTH_REQUEST, ident, len(pattrs), authenticator), pattrs]
 
