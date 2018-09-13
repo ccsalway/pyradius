@@ -9,6 +9,15 @@ AUTH_CHALLENGE = 12
 ACCT_REQUEST = 5
 ACCT_RESPONSE = 11
 
+CODES = {
+    1: 'AUTH_REQUEST',
+    2: 'AUTH_ACCEPT',
+    3: 'AUTH_REJECT',
+    5: 'ACCT_REQUEST',
+    11: 'ACCT_RESPONSE',
+    12: 'AUTH_CHALLENGE',
+}
+
 
 class Attributes:
     # https://tools.ietf.org/html/rfc2865

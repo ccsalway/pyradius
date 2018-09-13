@@ -138,7 +138,7 @@ class Server(object):
             if not secret:
                 raise Error("Discarding request. Unknown Host.")
             # unpack request
-            code, ident, length = unpack('!BBH', data[:4])  # header
+            code, ident, length = unpack('!BBH', data[:4])
             if code not in (1, 2, 3, 4, 5, 11, 12, 13, 255):
                 raise Error("Discarding request. Unknown RADIUS code {0}.".format(code))
             if data_length < length:
@@ -164,7 +164,7 @@ class Server(object):
                     else:  # AUTH_REJECT
                         resp_attrs = self.access_reject(attrs)
                     # Send Response
-                    self.send_response(sock, raddr, ident, code, authenticator, resp_attrs, secret)
+                    self.send_response(sock, raddr, ident, result, authenticator, resp_attrs, secret)
                 else:
                     serverlog.error("Unhandled RADIUS code received {} from {}.{}".format(code, *raddr))
             finally:

@@ -70,8 +70,15 @@ try:
     r, w, x = select([sock], [], [], 10)
     if sock in r:
         data, raddr = sock.recvfrom(buff_size)
-        attrs = attributes.unpack_attributes(data[20:])
-        print("Received: {0}".format(', '.join(['{}: {}'.format(k, attrs[k]) for k in attrs])))
+
+        resp_code, resp_ident, resp_length = unpack('!BBH', data[:4])  # header
+
+        if resp_ident != ident:
+            print("Mismatch identity. Discarding response.")
+        else:
+            print("Received: {}".format(CODES[resp_code]))
+            resp_attrs = attributes.unpack_attributes(data[20:resp_length])  # attributes
+            print("Received: {0}".format(', '.join(['{}: {}'.format(k, resp_attrs[k]) for k in resp_attrs])))
     else:
         print("Timed out waiting for response.")
 
