@@ -1,3 +1,4 @@
+import os
 import socket
 import threading
 import time
@@ -21,10 +22,11 @@ class Server(object):
     sessions_interval = 5
     session_timeout = 600
 
-    auth_request = AuthRequest
+    auth_request = None
 
-    def __init__(self, clients, bind_addr='', auth_port=1812, buff_size=4096):
+    def __init__(self, clients, auth_request=AuthRequest, bind_addr='', auth_port=1812, buff_size=4096):
         self.clients = clients
+        self.auth_request = auth_request
         self.bind_addr = bind_addr
         self.auth_port = auth_port
         self.buff_size = buff_size
@@ -84,8 +86,8 @@ class Server(object):
         threading.Thread(target=loop).start()
         return stopped.set
 
-    def create_session(self, raddr, ident, attr):
-        session_id = 'sess.{}.{}.{}'.format(raddr[0], raddr[1], ident)
+    def create_session(self, attr, raddr):
+        session_id = os.urandom(16)
         auditlog.debug("{1}.{2} Saving session '{0}'.".format(session_id, *raddr))
         self.sessions[session_id] = (time.time(), attr)
         return session_id
@@ -159,7 +161,7 @@ class Server(object):
                     if result == AUTH_ACCEPT:
                         resp_attrs = self.access_accept(attrs)
                     elif result == AUTH_CHALLENGE:
-                        session_id = self.create_session(raddr, ident, attrs)
+                        session_id = self.create_session(attrs, raddr)
                         resp_attrs = self.access_challenge(session_id, attrs)
                     else:  # AUTH_REJECT
                         resp_attrs = self.access_reject(attrs)
@@ -201,9 +203,9 @@ class Server(object):
         :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
         """
         attrs = OrderedDict({})
-        attrs['State'] = session_id
-        attrs['Session-Timeout'] = self.session_timeout
-        attrs['Reply-Message'] = 'Challenge to your auth request.'
+        # attrs['State'] = session_id
+        # attrs['Session-Timeout'] = self.session_timeout
+        # attrs['Reply-Message'] = 'Challenge xyz. Please send your response.'
         return attrs
 
     def pack_header(self, code, ident, length_attrs, authenticator):

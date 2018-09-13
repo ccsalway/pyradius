@@ -20,11 +20,10 @@ class CustomServer(Server):
         return attrs
 
 
-clients = {
-    # Can be a single IP or CIDR
-    '127.0.0.1': 'aXY8mAc4Bqi4G4tyyRgb0cwn8F1ee3oqyQWi8GE81#cANOuxAtCCL6LxxoVHwDrB',
-}
-
-server = CustomServer(clients)
-server.auth_request = CustomAuthRequest
-server.start()
+if __name__ == "__main__":
+    clients = {
+        # Can be a single IP or CIDR
+        '127.0.0.1': 'aXY8mAc4Bqi4G4tyyRgb0cwn8F1ee3oqyQWi8GE81#cANOuxAtCCL6LxxoVHwDrB',
+    }
+    server = CustomServer(clients, auth_request=CustomAuthRequest)
+    server.start()

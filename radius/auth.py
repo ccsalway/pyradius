@@ -19,6 +19,9 @@ class AuthRequest(object):
         self.secret = secret
 
     def __call__(self):
+        return self.authenticate()
+
+    def authenticate(self):
         try:
             # Message Authenticator
             if 'Message-Authenticator' in self.attrs:
