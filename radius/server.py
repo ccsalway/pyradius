@@ -20,7 +20,7 @@ class Server(object):
     connections_interval = 5
     connection_timeout = 10
     sessions_interval = 5
-    session_timeout = 600
+    session_timeout = 60
 
     auth_request = None
 
@@ -92,7 +92,7 @@ class Server(object):
         self.sessions[session_id] = (time.time(), attr)
         return session_id
 
-    def get_and_delete_session(self, raddr, session_id):
+    def get_session(self, session_id, raddr):
         auditlog.debug("{1}.{2} Getting session '{0}'.".format(session_id, *raddr))
         return self.sessions.pop(session_id, None)
 
@@ -198,7 +198,7 @@ class Server(object):
         """Build the attributes to send in an Access-Reject."""
         return OrderedDict({})
 
-    def access_challenge(self, session_id, req_attrs):
+    def access_challenge(self, req_attrs, session_id):
         """Build the attributes to send in an Access-Challenge.
         :param attrs: [RFC 2865]: 'Reply-Message', 'State', 'Vendor-Specific', 'Idle-Timeout', 'Session-Timeout', 'Proxy-State'
         """

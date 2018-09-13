@@ -29,8 +29,13 @@ class AuthRequest(object):
             # Username
             if 'User-Name' in self.attrs:
                 self.username = self.attrs['User-Name'][0]
+            # Challenge Response
+            if 'State' in self.attrs:
+                if self.verify_challenge():
+                    self.auditlog('Access-Accept')
+                    return AUTH_ACCEPT
             # EAP
-            if 'EAP-Message' in self.attrs:
+            elif 'EAP-Message' in self.attrs:
                 if 'Message-Authenticator' not in self.attrs:
                     raise Error("Discarding request. EAP-Message received without Message-Authenticator.")
                 eap_code, eap_id, eap_type, eap_data = self.unpack_eap_message()
@@ -43,17 +48,12 @@ class AuthRequest(object):
                     auditlog.debug("{1}.{2} EAP-Identity: {0}".format(repr(self.eap_identity), *self.raddr))
             # CHAP
             elif 'CHAP-Password' in self.attrs:
-                if self.verify_chap_password():
+                if self.verify_chap_password(self.get_user_password()):
                     self.auditlog('Access-Accept')
                     return AUTH_ACCEPT
             # PAP
             elif 'User-Password' in self.attrs:
-                if 'State' in self.attrs:  # Challenge Response
-                    # contains the attributes sent in the previous access-request
-                    state = self.server.get_and_delete_session(self.raddr, self.attrs['State'])
-                    if state:
-                        pass
-                elif self.verify_pap_password():
+                if self.verify_pap_password(self.get_user_password()):
                     self.auditlog('Access-Accept')
                     return AUTH_ACCEPT
         except Error as e:
@@ -70,26 +70,24 @@ class AuthRequest(object):
         eap_data = unpack('!{}s'.format(length - 5), eap_msg[5:length])[0]
         return eap_code, eap_id, eap_type, eap_data
 
-    def verify_chap_password(self):
+    def verify_chap_password(self, plain_password):
         """With CHAP, the Secret is not used!"""
-        plain_pswd = self.get_user_password()
         # id, password
         chap_password = self.attrs['CHAP-Password'][0]
         if len(chap_password) != 19:  # RFC2865
             # raise Error("{1}.{2} Invalid CHAP-Password length ({0}).".format(len(chap_password), *self.raddr))
             auditlog.warning("{1}.{2} Invalid CHAP-Password length {0}, should be 19.".format(len(chap_password), *self.raddr))
-        chapid, password = chap_password[0], chap_password[1:]
+        chapid, chappswd = chap_password[0], chap_password[1:]
         # challenge
         chap_challenge = self.authenticator
         if 'CHAP-Challenge' in self.attrs:
             chap_challenge = self.attrs['CHAP-Challenge'][0]
         # comparison
-        return password == md5("{}{}{}".format(chapid, plain_pswd, chap_challenge)).digest()
+        return chappswd == md5("{}{}{}".format(chapid, plain_password, chap_challenge)).digest()
 
-    def verify_pap_password(self):
-        plain_pswd = self.get_user_password()
+    def verify_pap_password(self, plain_password):
         buf = self.attrs['User-Password'][0]
-        # RFC says length max length == 128 characters but ignoring restriction
+        # RFC says maximum length == 128 characters, but ignoring rule
         if len(buf) % 16 != 0:
             raise Error("Invalid User-Password length.")
         pw = six.b('')
@@ -106,9 +104,12 @@ class AuthRequest(object):
         while pw.endswith(six.b('\x00')):
             pw = pw[:-1]
         try:
-            return plain_pswd == pw.decode('utf-8')
+            return plain_password == pw.decode('utf-8')
         except UnicodeDecodeError:
             raise Error("Invalid secret or User-Password.")
+
+    def verify_challenge(self):
+        return False
 
     def get_user_password(self):
         # Default password. Override method in production.
