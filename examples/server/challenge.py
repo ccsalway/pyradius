@@ -6,7 +6,7 @@ from radius.server import Server
 class CustomAuthRequest(AuthRequest):
     def __call__(self):
         result = self.authenticate()
-        # if Access-Accept,
+        # if Access-Accept, change to Access-Challenge
         if result == AUTH_ACCEPT:
             result = AUTH_CHALLENGE
         return result
